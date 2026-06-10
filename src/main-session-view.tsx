@@ -48,6 +48,30 @@ export function MainSessionView(props: {
         />
       </Show>
 
+      <Show when={m.ctx() && m.ctxBar()}>
+        {() => {
+          const c = m.ctx()!
+          const pct = c.percent!
+          const fg = pct < 60 ? m.pal().success : pct < 80 ? m.pal().warning : m.pal().error
+          return (
+            <>
+              <text>
+                <span style={{ fg: m.pal().text }}>{m.t().ctx} </span>
+                <span style={{ fg }}>[{m.ctxBar()}] </span>
+                <span style={{ fg: m.pal().text }}>{pct}%</span>
+              <span style={{ fg: m.pal().textMuted }}>{m.ctxTrend() ? ` ${m.ctxTrend()}` : ""}</span>
+              </text>
+              <TuiMetricRow
+                pal={m.pal()}
+                layout={layout}
+                label=""
+                value={`${c.tokens.toLocaleString()} / ${c.limit.toLocaleString()}`}
+              />
+            </>
+          )
+        }}
+      </Show>
+
       <TuiSection
         pal={m.pal()}
         layout={layout}

@@ -50,7 +50,7 @@ export type ModelCost = {
 
 export type ProviderInfo = {
   id: string
-  models: { [key: string]: { cost: ModelCost } }
+  models: { [key: string]: { cost: ModelCost; limit?: { context: number; output: number } } }
 }
 
 /** Session aggregate from `api.state.session.get()` — DB-level totals, not capped by message limit. */

@@ -24,6 +24,7 @@ export type UiStrings = {
   /** Shown in Agents section header: totals are child sessions only, not the parent session. */
   agentsScopeHint: string
   secTTL: string
+  ctx: string
   tok: string
 }
 
@@ -50,6 +51,7 @@ const EN: UiStrings = {
   secAgents: "Agents",
   agentsScopeHint: " · sub-sessions",
   secTTL: "TTL:",
+  ctx: "Context",
   tok: "tok",
 }
 
@@ -76,6 +78,7 @@ const ZH: UiStrings = {
   secAgents: "子 Agent",
   agentsScopeHint: " · 仅子会话",
   secTTL: "存活:",
+  ctx: "上下文",
   tok: "tok",
 }
 

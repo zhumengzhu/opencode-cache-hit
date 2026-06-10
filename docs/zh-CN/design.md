@@ -46,6 +46,18 @@ flowchart TB
 - 插件：`createCostFormatter(loadPluginConfig().cost)`；默认 `costUnit: USD` → `currency: CNY`，`rate: 6.77`。
 - 配置路径：优先 `~/.config/opencode/cache-hit.json`，兜底插件根目录 `cache-hit.config.json`。缺省见 `plugin-config.ts` 的 `DEFAULT_PLUGIN_CONFIG`。
 
+## 上下文用量
+
+用最后一条 assistant 消息的 `tokens.cache.read + tokens.input` 除以模型 `limit.context`，估算当前上下文窗口用量。颜色编码的进度条（<60% 绿，≥60% 黄，≥80% 红）搭配趋势箭头，显示窗口余量和相比上一轮的变化方向。
+
+- **数据源**：`stats.ts` 中 `contextUsage(messages, modelLimit)`——取最后一条有 token 的 assistant 消息，求 `cache.read + input`。
+- **模型限制**：从 `api.state.provider` → `model.limit.context` 解析。
+- **进度条宽度**：复用 `computeHitBarWidth`，传入上下文标签但无趋势位，使进度条与上方命中率对齐。
+- **趋势**：追踪 token 数的增量（非百分比），显示 `↑1.2K` / `↓500` 等。首次加载无趋势。
+- **UI**：位于存活行和明细栏之间的内联行，无折叠栏。
+
+注：OpenCode 内置的 `Context` 侧边栏和输入区 footer 使用了相同的计算公式，额外包含 `$x.xx spent` 行。cache-hit 版本增加了趋势指示器。
+
 ## 运行时架构
 
 ```mermaid
@@ -157,6 +169,7 @@ flowchart TD
 |------|----------|
 | 主 session snapshot | `createMemo` 内读 `refreshTick` + `session.get(sid)`（聚合）；fallback `messages(sid)` |
 | 主 session 消息列表（Hit 趋势） | `createMemo` 内读 `refreshTick` + `messages(sid)` |
+| 上下文用量 | `createMemo` 内读 `refreshTick` + `messages(sid)` + 模型 `limit.context` |
 | 子 agent 列表内容 | `refreshTick` + `childIds` → 每个 child 的 `session.get(cid)`；fallback `messages(cid)` |
 | 子 agent id 集合 | `session.list` 完成回调 / `message.updated` 发现新 child |
 

@@ -4,6 +4,7 @@ import {
   aggregateFromSessionObject,
   aggregateSessionFromMessages,
   cacheHitRatio,
+  contextUsage,
   subAgentHasStats,
   sidebarShouldShow,
   computePerCallHitTrend,
@@ -195,5 +196,48 @@ describe("withModelFallback", () => {
     const result = withModelFallback(snap, [])
     expect(result.model).toBe("")
     expect(result.providerID).toBe("")
+  })
+})
+
+describe("contextUsage", () => {
+  test("returns null for empty messages", () => {
+    expect(contextUsage([], 1000000)).toBeNull()
+    expect(contextUsage([{ role: "user" }], 1000000)).toBeNull()
+  })
+
+  test("returns null when no assistant message has tokens", () => {
+    expect(contextUsage([{ role: "assistant" }], 1000000)).toBeNull()
+  })
+
+  test("computes context from last assistant with cache", () => {
+    const msgs: Parameters<typeof contextUsage>[0] = [
+      { role: "assistant", tokens: { input: 100, output: 50, cache: { read: 5000 } } },
+      { role: "assistant", tokens: { input: 200, output: 100, cache: { read: 8000 } } },
+    ]
+    const result = contextUsage(msgs, 1000000)
+    expect(result).not.toBeNull()
+    expect(result!.tokens).toBe(8200) // 8000 + 200
+    expect(result!.limit).toBe(1000000)
+    expect(result!.percent).toBe(1) // 8200/1000000 rounded
+  })
+
+  test("uses last message with cache.read even when output is 0", () => {
+    const msgs: Parameters<typeof contextUsage>[0] = [
+      { role: "assistant", tokens: { input: 1000, output: 500, cache: { read: 100000 } } },
+      { role: "assistant", tokens: { input: 50, cache: { read: 200000 } } },
+    ]
+    const result = contextUsage(msgs, 500000)
+    expect(result).not.toBeNull()
+    // Last message has cache.read=200000 + input=50
+    expect(result!.tokens).toBe(200050)
+    expect(result!.percent).toBe(40) // 200050/500000 * 100
+  })
+
+  test("returns null percent when limit is 0 or undefined", () => {
+    const msgs: Parameters<typeof contextUsage>[0] = [
+      { role: "assistant", tokens: { output: 1, cache: { read: 1000 } } },
+    ]
+    expect(contextUsage(msgs, 0)!.percent).toBeNull()
+    expect(contextUsage(msgs, undefined)!.percent).toBeNull()
   })
 })

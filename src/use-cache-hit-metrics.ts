@@ -14,9 +14,11 @@ import type { AssistantMessage, ProviderInfo, SessionSnapshot, SubAgentSummary }
 import {
   cacheHitRatio,
   computePerCallHitTrend,
+  contextUsage,
   mainSessionHasStats,
   shortModelName,
 } from "./stats.ts"
+import type { ContextUsage } from "./stats.ts"
 import { computePricing, type PricingInfo } from "./pricing.ts"
 
 function activeLang(display: DisplayConfig) {
@@ -56,11 +58,12 @@ export function useCacheHitMetrics(props: {
   const trendLabel = createMemo(() =>
     perCall().hasTrend ? formatTrendLabel(perCall().trendPercent) : "",
   )
+  const hitBarWidth = createMemo(() =>
+    computeHitBarWidth(hitLabel(), props.layout.gauge(), trendLabel(), perCall().hasTrend),
+  )
+
   const bar = createMemo(() =>
-    formatHitBar(
-      perCall().hitPercent / 100,
-      computeHitBarWidth(hitLabel(), props.layout.gauge(), trendLabel(), perCall().hasTrend),
-    ),
+    formatHitBar(perCall().hitPercent / 100, hitBarWidth()),
   )
   const hitColor = createMemo(() => hitRateColor(perCall().hitPercent, pal()))
   const trendFg = createMemo(() => {
@@ -74,6 +77,39 @@ export function useCacheHitMetrics(props: {
       ? `${formatPercentOneDecimal(perCall().hitPercent)} ${t().hitFolded} ${trendLabel()}`
       : `${formatPercentOneDecimal(perCall().hitPercent)} ${t().hitFolded}`
     return { text: right, width: visualWidth(right) }
+  })
+
+  const modelCtxLimit = createMemo(() => {
+    const m = main().model
+    const pid = main().providerID
+    if (!m || !pid) return undefined
+    return props.providers().find((p) => p.id === pid)?.models[m]?.limit?.context
+  })
+
+  const ctx = createMemo(() => contextUsage(props.messages(), modelCtxLimit()))
+
+  const ctxBar = createMemo(() => {
+    const c = ctx()
+    if (!c || c.percent === null) return ""
+    return formatHitBar(c.percent / 100, hitBarWidth())
+  })
+
+  let ctxPrevTokens = 0
+  const ctxTrend = createMemo(() => {
+    const c = ctx()
+    if (!c || c.percent === null) {
+      ctxPrevTokens = 0
+      return null
+    }
+    const prev = ctxPrevTokens
+    ctxPrevTokens = c.tokens
+    if (prev === 0) return null
+    const d = c.tokens - prev
+    if (d === 0) return null
+    const sign = d > 0 ? "\u2191" : "\u2193"
+    const abs = Math.abs(d)
+    const text = abs >= 1000 ? `${(abs / 1000).toFixed(1)}K` : String(abs)
+    return `${sign}${text}`
   })
 
   return {
@@ -96,6 +132,10 @@ export function useCacheHitMetrics(props: {
     modelShort: createMemo(() => shortModelName(main().model)),
     totalSubCost: createMemo(() => subs().reduce((s, a) => s + a.cost, 0)),
     collapsedHitSummary,
+    modelCtxLimit,
+    ctx,
+    ctxBar,
+    ctxTrend,
   }
 }
 

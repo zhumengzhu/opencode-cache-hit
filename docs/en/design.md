@@ -46,6 +46,18 @@ flowchart TB
 - Plugin: `createCostFormatter(loadPluginConfig().cost)`; default `costUnit: USD` → `currency: CNY`, `rate: 6.77`.
 - Config file: `~/.config/opencode/cache-hit.json` (preferred) or `cache-hit.config.json` at plugin root (legacy). Defaults in `plugin-config.ts`.
 
+## Context usage
+
+Shows estimated context window consumption using `last.tokens.cache.read + last.tokens.input` from the most recent assistant message, divided by the model's `limit.context`. A color-coded bar (green <60%, yellow ≥60%, red ≥80%) with trend arrow indicates how full the context window is and whether it grew since the last turn.
+
+- **Data source**: `contextUsage(messages, modelLimit)` in `stats.ts` — reads the last assistant message with non-zero tokens, sums `cache.read + input`.
+- **Model limit**: resolved from `api.state.provider` → `model.limit.context`.
+- **Bar width**: reuses `computeHitBarWidth` with the context label but no trend space, so the bar aligns with the hit-rate bar above it.
+- **Trend**: tracks raw token count change between updates (not percentage), showing `↑1.2K` / `↓500` etc. Initial load shows no trend.
+- **UI**: inline row between the TTL line and the Detail section — no collapsible section.
+
+Note: OpenCode's built-in `Context` sidebar and prompt footer show the exact same calculation. The cache-hit version adds a trend indicator; the built-in version adds a cost line (`$x.xx spent`).
+
 ## Runtime architecture
 
 ```mermaid
@@ -157,6 +169,7 @@ Implementation: `agents-view.tsx` calls `formatSubAgentLabel` + `modelRowColor`;
 |------|---------|
 | Main snapshot | `createMemo` reads `refreshTick` + `session.get(sid)` (aggregate); fallback `messages(sid)` |
 | Main messages (Hit trend) | `createMemo` reads `refreshTick` + `messages(sid)` |
+| Context usage | `createMemo` reads `refreshTick` + `messages(sid)` + model `limit.context` |
 | Sub-agent content | `refreshTick` + `childIds` → `session.get(cid)` per child; fallback `messages(cid)` |
 | Sub-agent ids | `session.list` callback / debounced refresh on foreign activity |
 

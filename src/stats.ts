@@ -170,3 +170,29 @@ export function shortModelName(modelId: string): string {
   if (!modelId) return ""
   return modelId.includes("/") ? (modelId.split("/").pop() ?? modelId) : modelId
 }
+
+export type ContextUsage = {
+  tokens: number
+  limit: number
+  /** 0–100, null when model limit is unknown */
+  percent: number | null
+}
+
+export function contextUsage(
+  messages: readonly AssistantMessage[],
+  modelLimit: number | undefined,
+): ContextUsage | null {
+  const last = messages.findLast(
+    (m) => m.role === "assistant" && ((m.tokens?.output ?? 0) > 0 || (m.tokens?.cache?.read ?? 0) > 0),
+  )
+  if (!last) return null
+  const t = last.tokens
+  const tokens = (t?.cache?.read ?? 0) + (t?.input ?? 0)
+  if (tokens <= 0) return null
+  const limit = modelLimit ?? 0
+  return {
+    tokens,
+    limit,
+    percent: limit > 0 ? Math.round((tokens / limit) * 100) : null,
+  }
+}
