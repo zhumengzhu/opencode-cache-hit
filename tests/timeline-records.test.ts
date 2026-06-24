@@ -234,4 +234,31 @@ describe("assistantMessageToRecord", () => {
     expect(rec!.tpot).toBeUndefined()
     expect(rec!.tps).toBeUndefined()
   })
+
+  test("includes processId when provided", () => {
+    const msg = {
+      role: "assistant",
+      id: "m1",
+      modelID: "gpt-4",
+      time: { created: 1000, completed: 3000 },
+      tokens: { input: 10, output: 20 },
+    }
+    // (msg, sessionId, rootSessionId, scope, recordedAt, firstPartTime?, ttftSource?, toolDurations?, itlP50?, itlP90?, itlCount?, processId?)
+    const rec = assistantMessageToRecord(msg, "s1", "root", "main", 5000, undefined, undefined, undefined, undefined, undefined, undefined, 4242)
+    expect(rec).not.toBeNull()
+    expect(rec!.processId).toBe(4242)
+  })
+
+  test("processId undefined when not provided", () => {
+    const msg = {
+      role: "assistant",
+      id: "m1",
+      modelID: "gpt-4",
+      time: { created: 1000, completed: 3000 },
+      tokens: { input: 10, output: 20 },
+    }
+    const rec = assistantMessageToRecord(msg, "s1", "root", "main", 5000)
+    expect(rec).not.toBeNull()
+    expect(rec!.processId).toBeUndefined()
+  })
 })

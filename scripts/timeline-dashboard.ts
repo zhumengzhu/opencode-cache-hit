@@ -303,7 +303,7 @@ tr:hover td{background:#1c2128}
 
 <script>
 var RAW_DATA = TMPL_DATA
-var EXPAND_FIELDS = ["schema","recordedAt","sessionId","rootSessionId","scope","messageKey","modelId","created","completedAt","durationMs","isComplete","input","output","reasoning","cacheRead","cacheWrite","cost","hitPercent","skippedForHit","ttftMs","ttftSource","tps","tpot","itlP50","itlP90","itlCount","finish","toolDurations"]
+var EXPAND_FIELDS = ["schema","recordedAt","processId","sessionId","rootSessionId","scope","messageKey","modelId","created","completedAt","durationMs","isComplete","input","output","reasoning","cacheRead","cacheWrite","cost","hitPercent","skippedForHit","ttftMs","ttftSource","tps","tpot","itlP50","itlP90","itlCount","finish","toolDurations"]
 
 function fmtTtft(ms) { if (ms == null) return "-"; return ms < 1000 ? ms + "ms" : (ms / 1000).toFixed(1) + "s" }
 function fmtTps(v) { if (v == null) return "-"; return Math.round(v) + " tok/s" }

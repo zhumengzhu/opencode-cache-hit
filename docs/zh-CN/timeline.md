@@ -39,6 +39,7 @@ export type LlmCallRecord = {
   schema: 1
   /** 写入时间（ISO 8601，含时区），非 LLM 时间 */
   recordedAt: string
+  processId?: number       // 写入该记录的 OpenCode 进程 PID
   /** 所属 session */
   sessionId: string
   /** 主 session id；子 session 时与 sessionId 不同 */

@@ -38,6 +38,7 @@ export function assistantMessageToRecord(
   itlP50?: number,
   itlP90?: number,
   itlCount?: number,
+  processId?: number,
 ): LlmCallRecord | null {
   if (msg.role !== "assistant") return null
   const timing = timingFromAssistantMessage(msg)
@@ -60,6 +61,7 @@ export function assistantMessageToRecord(
   return {
     schema: 1,
     recordedAt: msToISOString(recordedAt),
+    processId,
     sessionId,
     rootSessionId,
     scope,

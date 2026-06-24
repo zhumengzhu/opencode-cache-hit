@@ -34,6 +34,7 @@ export function createTimelineCollector(opts: {
   const ttft = opts.firstPartTime
   const toolTiming = opts.toolTiming
   const itlTracker = opts.itlTracker
+  const processId = process.pid
   const defaultAppend = opts.append ?? ((path: string, record: LlmCallRecord, cfg: TimelineConfig) =>
     appendTimelineRecord(path, record, {
       maxLinesPerFile: cfg.maxLinesPerFile,
@@ -100,6 +101,7 @@ export function createTimelineCollector(opts: {
       q && q.p50,
       q && q.p90,
       q && q.count,
+      processId,
     )
     if (!rec) return
     if (!config.flushIncomplete && !rec.isComplete) return

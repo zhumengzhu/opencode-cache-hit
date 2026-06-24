@@ -4,6 +4,7 @@ import type { ToolDurationRecord } from "../tool-timing.ts"
 export type LlmCallRecord = {
   schema: 1
   recordedAt: string
+  processId?: number
   sessionId: string
   rootSessionId: string
   scope: "main" | "child"

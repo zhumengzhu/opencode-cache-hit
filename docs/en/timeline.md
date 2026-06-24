@@ -37,6 +37,7 @@ flowchart LR
 export type LlmCallRecord = {
   schema: 1
   recordedAt: string       // ISO 8601 with local timezone offset
+  processId?: number       // PID of the OpenCode process that wrote the record
   sessionId: string
   rootSessionId: string    // main session; differs for child scope
   scope: "main" | "child"
