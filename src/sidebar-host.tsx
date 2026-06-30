@@ -74,6 +74,9 @@ export function CacheHitSidebarHost(props: {
   const firstPartTracker = createFirstPartTimeTracker()
   onCleanup(() => firstPartTracker.dispose())
 
+  // Mutation counter so SolidJS detects in-place Map updates (same ref, new contents).
+  const [ttftVersion, setTtftVersion] = createSignal(0)
+
   const toolTiming = createToolTimingTracker({
     isSummaryEnabled: (tool) => isToolSummaryEnabled(timelineConfig().toolSummary, tool),
   })
@@ -164,12 +167,18 @@ export function CacheHitSidebarHost(props: {
   let streamingTickState = initialStreamingTickState()
 
   // firstPartTracker.get() returns the same Map instance (mutated in-place).
-  // void refreshTick() forces SolidJS to re-evaluate dependents on each refresh
-  // cycle, since reference equality alone would never trigger a re-run.
-  const firstPartTime = createMemo(() => {
-    void refreshTick()
-    return firstPartTracker.get()
-  })
+  // `equals: false` is required: SolidJS default `===` equality on the stable
+  // Map reference would suppress propagation to downstream memos even when
+  // ttftVersion triggers re-evaluation.
+  const firstPartTime = createMemo(
+    () => {
+      void refreshTick()
+      void ttftVersion()
+      return firstPartTracker.get()
+    },
+    undefined,
+    { equals: false },
+  )
 
   const recordPart = (
     messageID: string,
@@ -178,7 +187,10 @@ export function CacheHitSidebarHost(props: {
     source: "sdk" | "tui",
   ): boolean => {
     const first = firstPartTracker.handlePart(messageID, partType, startTime, source)
-    if (first) bumpRefresh()
+    if (first) {
+      bumpRefresh()
+      setTtftVersion((v) => v + 1)
+    }
     return first
   }
 
@@ -223,12 +235,16 @@ export function CacheHitSidebarHost(props: {
     childSync.resetForParentChange()
     timeline.resetForRootChange()
     firstPartTracker.reset()
+    setTtftVersion((v) => v + 1)
     toolTiming.reset()
     itlTracker.reset()
     streamingTickState = initialStreamingTickState()
     setStreamingNow({ phase: "idle", speed: 0 })
     if (sid) {
       childSync.loadChildren()
+      for (const msg of (props.api.state.session.messages(sid) ?? []) as AssistantMessage[]) {
+        if (msg.role === "assistant") seedTtftFromParts(msg)
+      }
     }
   })
 
