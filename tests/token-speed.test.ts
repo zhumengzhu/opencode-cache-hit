@@ -16,8 +16,10 @@ import {
 } from "../src/streaming-state.ts"
 
 describe("computeTokenSpeed", () => {
-  test("returns 0 for duration < 500ms", () => {
-    expect(computeTokenSpeed(100, 50, 400)).toBe(0)
+  test("returns 0 when tokens < 2", () => {
+    expect(computeTokenSpeed(1, 0, 1000)).toBe(0)
+    expect(computeTokenSpeed(0, 1, 1000)).toBe(0)
+    expect(computeTokenSpeed(0, 0, 1000)).toBe(0)
   })
 
   test("computes speed for duration >= 500ms", () => {
@@ -58,14 +60,14 @@ describe("computeAvgTokenSpeed", () => {
     expect(computeAvgTokenSpeed(msgs)).toBe(0)
   })
 
-  test("skips messages with duration < 500ms", () => {
+  test("includes messages with short duration if tokens >= 2", () => {
     const msgs = [
       {
         tokens: { output: 100 },
         time: { created: 0, completed: 400 },
       },
     ]
-    expect(computeAvgTokenSpeed(msgs)).toBe(0)
+    expect(computeAvgTokenSpeed(msgs)).toBe(250)
   })
 
   test("skips messages with zero tokens", () => {

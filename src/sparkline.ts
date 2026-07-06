@@ -37,7 +37,7 @@ export function collectSpeedValues(
   const speeds: number[] = []
   for (const rec of records) {
     const tokens = (rec.output ?? 0) + (rec.reasoning ?? 0)
-    if (!rec.durationMs || !tokens || rec.durationMs < 500) continue
+    if (!rec.durationMs || rec.durationMs <= 0 || tokens < 2) continue
     const speed = (tokens / rec.durationMs) * 1000
     if (speed > 0) speeds.push(speed)
   }

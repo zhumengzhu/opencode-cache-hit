@@ -2,8 +2,9 @@ import { generationDurationMs, timingFromAssistantMessage } from "./message-timi
 import type { AssistantMessage } from "./types.ts"
 
 export function computeTokenSpeed(output: number, reasoning: number, durationMs: number): number {
-  if (durationMs < 500) return 0
-  return ((output + reasoning) / durationMs) * 1000
+  const tokens = output + reasoning
+  if (durationMs <= 0 || tokens < 2) return 0
+  return (tokens / durationMs) * 1000
 }
 
 export function computeTokenTpotMs(
@@ -33,7 +34,7 @@ export function computeAvgTokenSpeed(
     const msgID = msg.id ?? msg.messageID
     const firstTime = msgID ? firstPartTime?.get(msgID) : undefined
     const duration = generationDurationMs(timing, firstTime)
-    if (duration === undefined || duration < 500) continue
+    if (duration === undefined || duration <= 0) continue
     totalTokens += output + reasoning
     totalMs += duration
   }

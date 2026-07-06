@@ -50,8 +50,8 @@ describe("collectSpeedValues", () => {
     expect(collectSpeedValues([{ durationMs: 1000 }])).toEqual([])
   })
 
-  test("skips records with durationMs < 500", () => {
-    expect(collectSpeedValues([{ durationMs: 400, output: 100 }])).toEqual([])
+  test("collects records with short duration when tokens >= 2", () => {
+    expect(collectSpeedValues([{ durationMs: 400, output: 100 }])).toEqual([250])
   })
 
   test("computes speed for valid records", () => {
