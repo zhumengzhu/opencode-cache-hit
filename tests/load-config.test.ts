@@ -1,7 +1,8 @@
 import { describe, test, expect } from "bun:test"
-import { existsSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CONFIG_PATH, PLUGIN_ROOT, XDG_CONFIG_PATH, cloneDefault, loadPluginConfig } from "../src/load-config.ts"
+import { CONFIG_PATH, PLUGIN_ROOT, XDG_CONFIG_PATH, cloneDefault, loadPluginConfig, tryRead } from "../src/load-config.ts"
 import { DEFAULT_PLUGIN_CONFIG } from "../src/plugin-config.ts"
 
 describe("load-config paths", () => {
@@ -43,5 +44,43 @@ describe("load-config paths", () => {
     expect(DEFAULT_PLUGIN_CONFIG.cacheTTL.providers).toEqual({})
     expect(DEFAULT_PLUGIN_CONFIG.timeline.toolSummary).toEqual({ allTools: true, bash: false })
     expect(DEFAULT_PLUGIN_CONFIG.display.lang).toBe("en")
+  })
+
+  test("parses JSONC configs — comments and trailing commas", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cache-hit-"))
+    const path = join(dir, "cache-hit.json")
+    writeFileSync(
+      path,
+      [
+        "{",
+        '  // line comment',
+        '  "currency": "USD",',
+        '  "costUnit": "USD",',
+        '  "display": { "lang": "zh" }, // trailing comma + comment',
+        '  /* block comment */ "timeline": { "enabled": false },',
+        "}",
+      ].join("\n"),
+    )
+    try {
+      const cfg = tryRead(path)
+      expect(cfg).not.toBeNull()
+      expect(cfg?.cost.currency).toBe("USD")
+      expect(cfg?.cost.costUnit).toBe("USD")
+      expect(cfg?.display.lang).toBe("zh")
+      expect(cfg?.timeline.enabled).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("returns null for malformed config content", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cache-hit-"))
+    const path = join(dir, "bad.json")
+    writeFileSync(path, "{ nope")
+    try {
+      expect(tryRead(path)).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -7,6 +7,7 @@ import {
   normalizePluginConfig,
   DEFAULT_PLUGIN_CONFIG,
 } from "./plugin-config.ts"
+import { parseJsonc } from "./jsonc.ts"
 
 /** Parent of `src/` (plugin package root). Do not wrap in `dirname` — `..` already resolves there. */
 export const PLUGIN_ROOT = fileURLToPath(new URL("..", import.meta.url))
@@ -21,9 +22,9 @@ export function cloneDefault(): PluginConfig {
   return structuredClone(DEFAULT_PLUGIN_CONFIG)
 }
 
-function tryRead(path: string): PluginConfig | null {
+export function tryRead(path: string): PluginConfig | null {
   try {
-    return normalizePluginConfig(JSON.parse(readFileSync(path, "utf8")))
+    return normalizePluginConfig(parseJsonc(readFileSync(path, "utf8")))
   } catch {
     return null
   }

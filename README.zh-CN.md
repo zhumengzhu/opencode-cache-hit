@@ -89,6 +89,8 @@ OpenCode **TUI 侧边栏插件**：展示 prompt cache 命中率、token 用量�
 
 ## 配置
 
+配置文件支持 JSONC（行注释、块注释、尾逗号）。`cache-hit.config.example.json` 保持严格 JSON，便于 jq、编辑器等外部工具使用。
+
 ### 成本展示（USD → CNY 示例）
 
 ```json
@@ -105,7 +107,7 @@ OpenCode **TUI 侧边栏插件**：展示 prompt cache 命中率、token 用量�
 | `currency` | 侧边栏展示币种 |
 | `rate` | `costUnit` → `currency` 的汇率 |
 
-当无需换算时使用 `"currency": "USD", "costUnit": "USD"`。
+`rate` 是**手动维护的快照值**——示例中的 `6.77` 是当时 USD→CNY 的汇率，不会自动更新。省略 `rate` 时回落到内置默认值 6.77，因此只有在展示非 USD 币种且希望汇率准确时才需要设置（可到 [Xe](https://www.xe.com/currencyconverter/)、[Wise](https://wise.com/currency-converter) 或 [OANDA](https://www.oanda.com/currency-converter/) 查询最新汇率）。当无需换算时使用 `"currency": "USD", "costUnit": "USD"`。
 
 支持的展示币种：`USD`、`CNY`、`EUR`、`GBP`、`JPY`（见 `cache-hit.config.example.json`）。暂未实现类似 visual-cache 的 `/cache-currency` 斜杠命令。
 

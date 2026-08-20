@@ -89,6 +89,8 @@ Load errors: `~/.local/share/opencode/log/` (search `cache-hit` or `failed to lo
 
 ## Configuration
 
+Configuration files accept JSONC (line/block comments and trailing commas). `cache-hit.config.example.json` ships as strict JSON so it stays tool-friendly (jq, editors).
+
 ### Cost display (USD → CNY example)
 
 ```json
@@ -105,7 +107,7 @@ Load errors: `~/.local/share/opencode/log/` (search `cache-hit` or `failed to lo
 | `currency` | Sidebar display currency |
 | `rate` | Multiply `costUnit` → `currency` |
 
-Use `"currency": "USD", "costUnit": "USD"` when no conversion is needed.
+`rate` is a **manual snapshot** — the `6.77` in the example is the USD→CNY rate at the time it was written and does not auto-update. Omitting `rate` falls back to the same built-in default, so it only needs to be set when you display a non-USD currency and want a current rate (e.g. from [Xe](https://www.xe.com/currencyconverter/), [Wise](https://wise.com/currency-converter), or [OANDA](https://www.oanda.com/currency-converter/)). Use `"currency": "USD", "costUnit": "USD"` when no conversion is needed.
 
 Supported display currencies in config: `USD`, `CNY`, `EUR`, `GBP`, `JPY` (see `cache-hit.config.example.json`). Runtime slash switching like visual-cache’s `/cache-currency` is **not** implemented yet.
 
@@ -271,7 +273,7 @@ Then reinstall via `Ctrl+P` → install plugin, and **restart OpenCode**.
 To avoid the pinning issue entirely, install a **pinned version** instead of `@latest`:
 
 ```jsonc
-{ "plugin": ["opencode-cache-hit@0.7.0"] }
+{ "plugin": ["opencode-cache-hit@0.7.1"] }
 ```
 
 ## Compatibility

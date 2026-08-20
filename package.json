@@ -1,6 +1,6 @@
 {
   "name": "opencode-cache-hit",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "OpenCode TUI sidebar: prompt cache hit rate, tokens & cost with sub-agent rollup. Works with opencode-visual-cache; optional per-call JSONL timeline.",
   "type": "module",
   "license": "MIT",
