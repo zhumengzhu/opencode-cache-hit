@@ -51,11 +51,11 @@ flowchart TB
 两个正交的价格维度决定侧边栏显示的有效百万 token 单价：
 
 - **上下文档位**：读取 `state.provider` 的运行时 cost 档位（`tiers[]` / `experimentalOver200K`，内部归一化为上下文档并携带自身阈值）；按总上下文（`input + cacheRead`）与阈值选档（模型级配置 > 运行时档位阈值 > 全局 > 200k）。GPT-5.6 类模型零配置生效。
-- **时段档**：`schedule`（默认 DeepSeek 高峰 09:00-12:00 / 14:00-18:00 北京时间，其余空闲）+ 单模型 `multipliers`（默认 DeepSeek 空闲 0.5×）或绝对价 `levels`（时段未命中回退静态价；`enabled: false` 恢复完全静态计价）。
+- **时段档**：`schedule`（默认 DeepSeek 高峰为北京时间**周一至周五** 09:00-12:00 / 14:00-18:00，其余含周末为空闲）+ 单模型 `multipliers`（默认 DeepSeek 空闲 0.5×）或绝对价 `levels`（时段未命中回退静态价；`enabled: false` 恢复完全静态计价）。窗口可带可选 `days`（ISO 1=周一…7=周日；省略 = 每天）；`windows` 为空的 level 即「**回退档**」（默认 `offpeak` 兜底周末等一切未覆盖时刻）。跨天窗口锚定开启日（`days` 日承载晚间段，次日承载早晨段）。
 
 查找回退链（`src/dynamic-pricing/lookup.ts`）：显式 `levels` → 显式 `multipliers` → 内置 DeepSeek 默认 → `state.provider` 静态价。
 
-- `src/dynamic-pricing/schedule.ts`：基于时区的窗口匹配（`Intl.DateTimeFormat`），`nextBoundaryMs` 驱动 `use-cache-hit-metrics.ts` 中 `setTimeout` 精确刷新——无需轮询。
+- `src/dynamic-pricing/schedule.ts`：基于时区的窗口匹配（`Intl.DateTimeFormat`，含 `tzWeekdayOf` 星期判定），`nextBoundaryMs` 星期感知地驱动 `use-cache-hit-metrics.ts` 中 `setTimeout` 精确刷新（周五 18:00 后直达周一 09:00，周末不轮询）——无需轮询。
 - 会话成本重算（`src/dynamic-pricing/recompute.ts`）：逐消息用 `msg.time.created` 选时段、总上下文（`input + cacheRead`）选上下文档；`tokens.input` 不含缓存，缓存命中部分按 `cacheReadRate` 单独计费。动态规则生效时展示标注 `≈`。
 - 子 agent：`session.list` 条目携带 `time.created`（`src/session-list.ts` → `child-session-sync.ts`），可按子会话创建时刻重算成本（`recomputeSubAgentCost`）。
 - 时间轴看板（`scripts/timeline-dashboard.ts`）：离线重算读取 `~/.config/opencode/opencode.json`（JSONC 感知）的 provider 单价，逐条向 `LlmCallRecord` 注入 `dynCost`（`≈` 展示并计入图表/合计）。

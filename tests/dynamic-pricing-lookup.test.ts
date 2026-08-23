@@ -93,6 +93,22 @@ describe("resolveModelCost — built-in DeepSeek time-of-day", () => {
     expect(r?.rates.cache.read).toBe(0.005)
     expect(r?.level).toBe("offpeak")
   })
+  test("weekend peak hours → offpeak 0.5× (DeepSeek weekend idle)", () => {
+    // 周六 10:00 本应全价的时段 → 空闲半价
+    const sat = resolveModelCost(PROVIDERS, "deepseek", "deepseek/deepseek-v4-flash", {
+      now: bjt(2026, 8, 15, 10, 0),
+      rules: DEFAULT_RULES,
+    })
+    expect(sat?.level).toBe("offpeak")
+    expect(sat?.rates.input).toBe(0.25)
+    // 周日 15:00 同样
+    const sun = resolveModelCost(PROVIDERS, "deepseek", "deepseek/deepseek-v4-flash", {
+      now: bjt(2026, 8, 16, 15, 0),
+      rules: DEFAULT_RULES,
+    })
+    expect(sun?.level).toBe("offpeak")
+    expect(sun?.rates.input).toBe(0.25)
+  })
   test("disabled rules → static rates, no level", () => {
     const r = resolveModelCost(PROVIDERS, "deepseek", "deepseek/deepseek-v4-flash", {
       now: bjt(2026, 8, 10, 22, 0),
@@ -100,6 +116,65 @@ describe("resolveModelCost — built-in DeepSeek time-of-day", () => {
     })
     expect(r?.rates.input).toBe(0.5)
     expect(r?.level).toBeUndefined()
+  })
+})
+
+describe("resolveModelCost — level only for time-of-day priced models", () => {
+  test("model without any dynamic rule: no level even when schedule fallback matches", () => {
+    // gpt-5.6 仅有 context 分档，无 levels/multipliers；周六 10:00 默认回退档命中 offpeak，但不标注
+    const r = resolveModelCost(PROVIDERS, "openai", "gpt-5.6", {
+      now: bjt(2026, 8, 15, 10, 0),
+      rules: DEFAULT_RULES,
+    })
+    expect(r?.rates.input).toBe(1.0)
+    expect(r?.level).toBeUndefined()
+    expect(r?.explicit).toBe(false)
+  })
+  test("contextThreshold-only rule: no level badge (but still explicit)", () => {
+    const rules = {
+      ...DEFAULT_RULES,
+      providers: {
+        openai: { models: { "gpt-5.6": { contextThreshold: 100_000 } } },
+      },
+    }
+    const r = resolveModelCost(PROVIDERS, "openai", "gpt-5.6", {
+      now: bjt(2026, 8, 10, 10, 0), // 周一 10:00 —— 本会命中 peak
+      contextTokens: 50_000,
+      rules,
+    })
+    expect(r?.rates.input).toBe(1.0)
+    expect(r?.level).toBeUndefined()
+    expect(r?.explicit).toBe(true)
+  })
+  test("multipliers without the current level: full price, no badge", () => {
+    // 只配了 peak 的模型：offpeak 时刻 factor=1（全价），不贴「空闲」徽标
+    const rules = {
+      ...DEFAULT_RULES,
+      providers: {
+        openai: {
+          models: { "gpt-5.6": { multipliers: { peak: 0.9 } } },
+        },
+      },
+    }
+    const offpeak = resolveModelCost(PROVIDERS, "openai", "gpt-5.6", {
+      now: bjt(2026, 8, 15, 10, 0), // 周六 → 回退档 offpeak
+      rules,
+    })
+    expect(offpeak?.rates.input).toBe(1.0) // 无 offpeak 档 → 不折价
+    expect(offpeak?.level).toBeUndefined()
+    const peak = resolveModelCost(PROVIDERS, "openai", "gpt-5.6", {
+      now: bjt(2026, 8, 10, 10, 0), // 周一 10:00 → peak
+      rules,
+    })
+    expect(peak?.rates.input).toBe(0.9)
+    expect(peak?.level).toBe("peak")
+  })
+  test("DeepSeek built-in default still reports level", () => {
+    const r = resolveModelCost(PROVIDERS, "deepseek", "deepseek/deepseek-v4-flash", {
+      now: bjt(2026, 8, 10, 10, 0),
+      rules: DEFAULT_RULES,
+    })
+    expect(r?.level).toBe("peak")
   })
 })
 
@@ -126,6 +201,30 @@ describe("resolveModelCost — explicit rules override", () => {
     })
     expect(r?.rates.input).toBe(0.22)
     expect(r?.level).toBe("offpeak")
+  })
+  test("levels + fallback: weekend falls to offpeak levels", () => {
+    const rules = {
+      ...DEFAULT_RULES,
+      providers: {
+        deepseek: {
+          models: {
+            "deepseek/deepseek-v4-flash": {
+              levels: {
+                peak: { input: 0.44, output: 0.88, cache: { read: 0.01, write: 0 } },
+                offpeak: { input: 0.22, output: 0.44, cache: { read: 0.005, write: 0 } },
+              },
+            },
+          },
+        },
+      },
+    }
+    // 周六 10:00 → 回退档 offpeak → 取 levels.offpeak
+    const r = resolveModelCost(PROVIDERS, "deepseek", "deepseek/deepseek-v4-flash", {
+      now: bjt(2026, 8, 15, 10, 0),
+      rules,
+    })
+    expect(r?.level).toBe("offpeak")
+    expect(r?.rates.input).toBe(0.22)
   })
   test("per-model contextThreshold override", () => {
     const rules = {
@@ -285,6 +384,51 @@ describe("resolveModelCost — enabled:false disables everything (#2)", () => {
     })
     expect(r?.rates.input).toBe(1.0) // 基础档，不应用 context_over_200k
     expect(r?.contextTier).toBeUndefined()
+  })
+})
+
+describe("resolveModelCost — DeepSeek legacy schedule warning (#Q6)", () => {
+  const DS_PRO: ProviderInfo[] = [
+    {
+      id: "deepseek",
+      models: {
+        // 独立模型 key，避免与其它用例共用模块级去重 Set
+        "deepseek/deepseek-v4-pro": {
+          cost: { input: 1.0, output: 2.0, cache: { read: 0.1, write: 0 } },
+        },
+      },
+    },
+  ]
+  test("warns once for windowed schedule without days; silent with days / non-DeepSeek", () => {
+    const warnings: string[] = []
+    const origWarn = console.warn
+    console.warn = (msg?: unknown) => { warnings.push(String(msg)) }
+    try {
+      const legacy = {
+        ...DEFAULT_RULES,
+        schedule: [{ level: "peak", windows: [{ start: 9 * 60, end: 12 * 60 }] }],
+      }
+      const hit = (rules: typeof DEFAULT_RULES) =>
+        resolveModelCost(DS_PRO, "deepseek", "deepseek/deepseek-v4-pro", {
+          now: bjt(2026, 8, 10, 10, 0),
+          rules,
+        })
+      // 旧配置（无 days）→ 仅提示一次（Set 去重）
+      hit(legacy)
+      hit(legacy)
+      expect(warnings.length).toBe(1)
+      expect(warnings[0]).toContain("days")
+      // 星期感知默认 schedule → 不提示
+      warnings.length = 0
+      hit(DEFAULT_RULES)
+      expect(warnings.length).toBe(0)
+      // 非 DeepSeek 模型 → 不提示
+      warnings.length = 0
+      resolveModelCost(PROVIDERS, "openai", "gpt-5.6", { rules: legacy })
+      expect(warnings.length).toBe(0)
+    } finally {
+      console.warn = origWarn
+    }
   })
 })
 

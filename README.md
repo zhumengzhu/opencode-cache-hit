@@ -209,20 +209,23 @@ Shows how long the prompt cache has been alive. Color changes when exceeding TTL
 
 ### Dynamic pricing (`dynamicPricing`, default on)
 
-Model rates are normally static per-million USD from OpenCode's provider registry. Some models price by **time of day** (DeepSeek V4: peak 09:00-12:00 / 14:00-18:00 Beijing time, off-peak half price) or by **context size** (`context_over_200k`, e.g. GPT-5.6: rates roughly double above 200k tokens).
+Model rates are normally static per-million USD from OpenCode's provider registry. Some models price by **time of day** (DeepSeek V4: peak Mon–Fri 09:00-12:00 / 14:00-18:00 Beijing time, off-peak half price — weekends are off-peak) or by **context size** (`context_over_200k`, e.g. GPT-5.6: rates roughly double above 200k tokens).
 
 Without config, the plugin already:
 
 - Reads the model's context tier from `state.provider` (runtime `tiers` / `experimentalOver200K`, normalized internally) and shows the right tier based on total context (input + cache read) vs the threshold.
-- Applies a built-in DeepSeek off-peak 0.5× multiplier when the schedule below matches.
+- Applies a built-in DeepSeek off-peak 0.5× multiplier when the schedule below matches (weekdays only for peak, weekends fall to the off-peak fallback).
 
 ```json
 "dynamicPricing": {
   "enabled": true,
   "timezone": "Asia/Shanghai",
   "schedule": [
-    { "level": "peak",    "windows": [{"start": "09:00", "end": "12:00"}, {"start": "14:00", "end": "18:00"}] },
-    { "level": "offpeak", "windows": [{"start": "18:00", "end": "09:00"}, {"start": "12:00", "end": "14:00"}] }
+    { "level": "peak", "windows": [
+      { "start": "09:00", "end": "12:00", "days": [1, 2, 3, 4, 5] },
+      { "start": "14:00", "end": "18:00", "days": [1, 2, 3, 4, 5] }
+    ] },
+    { "level": "offpeak", "windows": [] }
   ],
   "contextThreshold": 200000,
   "providers": {
@@ -241,7 +244,7 @@ Without config, the plugin already:
 |-------|---------|---------|
 | `enabled` | `true` | Master switch. Disable to restore fully static pricing |
 | `timezone` | `Asia/Shanghai` | IANA zone used for schedule matching (DeepSeek prices are Beijing-time based) |
-| `schedule` | DeepSeek peak/off-peak | `{level, windows:[{start,end}]}` list; `HH:MM`, cross-midnight windows allowed |
+| `schedule` | DeepSeek peak/off-peak | `{level, windows:[{start,end,days?}]}` list; `HH:MM`, cross-midnight windows allowed. `days` is an optional ISO weekday list (1=Monday … 7=Sunday); omitted or `[]` = every day. A level with **empty `windows`** is the **catch-all fallback**: it applies whenever no windowed level matches (e.g. weekends with the default DeepSeek schedule) |
 | `contextThreshold` | `200000` | Token threshold for the context tier; per-model `contextThreshold` wins over the runtime tier size from `state.provider` |
 | `providers` | `{}` | Per `providerID` → `modelID` rules |
 
@@ -251,11 +254,14 @@ Per-model rules support two forms (explicit config wins over the built-in DeepSe
 - `levels`: absolute rates per level, e.g. `{"peak": {"input": 0.44, "output": 0.88, "cacheRead": 0.01}, "offpeak": {"input": 0.22, ...}}`. Cache rates may be written as flat `cacheRead`/`cacheWrite` (or `cache_read`/`cache_write`) or nested `cache: {"read": …, "write": …}` (both are accepted; flat wins if both present). Default unit is **USD per 1M** (same as `state.provider`). To write prices in another currency, set `"currency": "CNY"` and either make it match the display `cost.currency` (converted via `cost.rate`) or provide the per-rule `"rate"` (USD → that currency, e.g. `"rate": 1.08` for EUR). If the currency cannot be converted (no `rate`, currency ≠ display currency), a warning is logged to stderr and the values are treated as USD. `multipliers` are ratios and have no currency.
 - `contextThreshold`: per-model override of the global threshold (wins over the runtime tier size from `state.provider`).
 
-Rates shown in the sidebar switch automatically at schedule boundaries (no polling). Session cost shown is recomputed per message from its request time + context tier when dynamic rules apply (marked `≈`); otherwise OpenCode's own `msg.cost` is used. Sub-agent rows use their **session creation time** (`session.list`) for time-of-day pricing (marked `≈` on the Agents total when any child was recomputed).
+Rates shown in the sidebar switch automatically at schedule boundaries (no polling). The `peak`/`off-peak` badge on the rate row appears **only when the model actually prices that level** (the level exists in its explicit `levels`/`multipliers`, or the built-in DeepSeek default applies); plain static models and unpriced levels (e.g. a peak-only rule at an off-peak moment) show no badge. Session cost shown is recomputed per message from its request time + context tier when dynamic rules apply (marked `≈`); otherwise OpenCode's own `msg.cost` is used. Sub-agent rows use their **session creation time** (`session.list`) for time-of-day pricing (marked `≈` on the Agents total when any child was recomputed).
+
+> [!NOTE]
+> **Migration (weekday-aware schedules).** Schedules now support an optional `days` field (ISO weekday, 1=Monday … 7=Sunday; omitted = every day) and a catch-all **fallback level** (a level with empty `windows`). DeepSeek's official peak is **Monday–Friday** 09:00-12:00 / 14:00-18:00 Beijing time; weekends are off-peak. The built-in default schedule is weekday-aware, and new configs written from the examples above are too. **Legacy configs without `days` keep the old behavior — weekends are still billed as peak.** To pick up the fix, add `"days": [1,2,3,4,5]` to your `peak` windows (or use the new default schedule with an `offpeak` fallback). If you resolve a DeepSeek model while your configured schedule has windowed levels but no `days`, the plugin logs a one-time hint to stderr.
 
 **Timeline dashboard** ([docs/en/timeline.md](docs/en/timeline.md)) also recomputes costs offline: it reads `~/.config/opencode/opencode.json` (JSONC-aware) for provider rates and injects `dynCost` per record (shown with `≈` and in charts/totals when it differs from the original).
 
-**Refresh official DeepSeek rates**: `bun scripts/fetch-deepseek-pricing.ts` prints a ready-to-paste `dynamicPricing.providers` snippet (CNY by default with `"currency": "CNY"`, `--usd --rate 6.77` for USD).
+**Refresh official DeepSeek rates**: `bun scripts/fetch-deepseek-pricing.ts` prints a ready-to-paste `dynamicPricing` snippet — a weekday-aware `schedule` (peak Mon–Fri, off-peak catch-all fallback) plus `providers` rates (CNY by default with `"currency": "CNY"`, `--usd --rate 6.77` for USD).
 
 ## Updating
 
@@ -273,7 +279,7 @@ Then reinstall via `Ctrl+P` → install plugin, and **restart OpenCode**.
 To avoid the pinning issue entirely, install a **pinned version** instead of `@latest`:
 
 ```jsonc
-{ "plugin": ["opencode-cache-hit@0.7.1"] }
+{ "plugin": ["opencode-cache-hit@0.7.2"] }
 ```
 
 ## Compatibility

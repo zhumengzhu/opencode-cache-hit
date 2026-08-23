@@ -33,9 +33,13 @@
   "dynamicPricing": {
     "enabled": true,
     "timezone": "Asia/Shanghai",
+    "$comment-schedule": "Weekday-aware schedule: days = ISO weekday (1=Monday…7=Sunday); omitted = every day. A level with empty windows is the catch-all fallback. DeepSeek official: peak is Mon-Fri 09:00-12:00 / 14:00-18:00 Beijing, everything else (incl. weekends) is off-peak. Legacy configs without days keep peak on weekends — add days:[1,2,3,4,5] to match DeepSeek weekend idle pricing.",
     "schedule": [
-      { "level": "peak",    "windows": [{"start": "09:00", "end": "12:00"}, {"start": "14:00", "end": "18:00"}] },
-      { "level": "offpeak", "windows": [{"start": "18:00", "end": "09:00"}, {"start": "12:00", "end": "14:00"}] }
+      { "level": "peak", "windows": [
+        { "start": "09:00", "end": "12:00", "days": [1, 2, 3, 4, 5] },
+        { "start": "14:00", "end": "18:00", "days": [1, 2, 3, 4, 5] }
+      ] },
+      { "level": "offpeak", "windows": [] }
     ],
     "contextThreshold": 200000,
     "providers": {

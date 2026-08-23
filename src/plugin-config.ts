@@ -4,6 +4,7 @@ import {
   type DynamicPricingConfig,
   type DynamicPricingSchedule,
   type ModelPricingRule,
+  type TimeWindow,
   DEFAULT_DYNAMIC_PRICING,
 } from "./dynamic-pricing/types.ts"
 import { parseClockTime } from "./dynamic-pricing/schedule.ts"
@@ -289,6 +290,23 @@ function normalizeModelPricingRule(raw: unknown): ModelPricingRule {
   return rule
 }
 
+/** 解析 `days`（ISO 1=周一…7=周日）：过滤非法值并告警、去重、排序；空/非法结果 = 全周（省略）。 */
+function normalizeDays(raw: unknown): number[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const seen = new Set<number>()
+  for (const v of raw) {
+    if (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 7) {
+      seen.add(v)
+    } else {
+      console.warn(
+        `dynamicPricing: ignoring invalid schedule days value ${JSON.stringify(v)}` +
+          " (expected integer 1..7, ISO 1=Monday … 7=Sunday)",
+      )
+    }
+  }
+  return seen.size > 0 ? [...seen].sort() : undefined
+}
+
 function normalizeSchedule(raw: unknown): DynamicPricingSchedule {
   if (!Array.isArray(raw)) return structuredClone(DEFAULT_DYNAMIC_PRICING.schedule)
   const out: DynamicPricingSchedule = []
@@ -296,6 +314,11 @@ function normalizeSchedule(raw: unknown): DynamicPricingSchedule {
     const o = item as Record<string, unknown> | undefined
     if (!o || typeof o !== "object") continue
     if (typeof o.level !== "string" || !Array.isArray(o.windows)) continue
+    // 显式空 windows 的 level = 回退档（兜底）。
+    if (o.windows.length === 0) {
+      out.push({ level: o.level, windows: [] })
+      continue
+    }
     const windows = o.windows
       .map((w) => {
         const ww = w as Record<string, unknown> | undefined
@@ -303,12 +326,24 @@ function normalizeSchedule(raw: unknown): DynamicPricingSchedule {
         const start = typeof ww.start === "string" ? parseClockTime(ww.start) : null
         const end = typeof ww.end === "string" ? parseClockTime(ww.end) : null
         if (start === null || end === null) return null
-        return { start, end }
+        const days = normalizeDays(ww.days)
+        return days ? { start, end, days } : { start, end }
       })
-      .filter((w): w is { start: number; end: number } => w !== null)
+      .filter((w): w is TimeWindow => w !== null)
+    // 窗口全部非法 → 整档丢弃（与旧行为一致，避免 typo 配置静默变为兜底档）。
     if (windows.length > 0) out.push({ level: o.level, windows })
   }
-  return out.length > 0 ? out : structuredClone(DEFAULT_DYNAMIC_PRICING.schedule)
+  // 回退档至多 1 个（契约见 types.ts ScheduleLevel）：截断多余的空 windows 档，windowed 档保持原顺序。
+  const windowed = out.filter((l) => l.windows.length > 0)
+  const fallbacks = out.filter((l) => l.windows.length === 0)
+  if (fallbacks.length > 1) {
+    console.warn(
+      "dynamicPricing: schedule has more than one fallback level (level with empty windows); " +
+        "keeping only the first as the catch-all",
+    )
+  }
+  const merged = [...windowed, ...fallbacks.slice(0, 1)]
+  return merged.length > 0 ? merged : structuredClone(DEFAULT_DYNAMIC_PRICING.schedule)
 }
 
 export function normalizeDynamicPricingConfig(

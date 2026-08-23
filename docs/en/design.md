@@ -51,7 +51,7 @@ flowchart TB
 Two orthogonal price dimensions resolve to the effective per-1M rates shown in the sidebar:
 
 - **Context tier**: reads the runtime cost tiers from `state.provider` (`tiers[]` / `experimentalOver200K`, normalized into the internal context tier with its own threshold); picks the tier by total context (`input + cacheRead`) vs the threshold (per-model config > runtime tier size > global > 200k). Zero-config for models like GPT-5.6.
-- **Time-of-day tier**: `schedule` (default DeepSeek peak 09:00-12:00 / 14:00-18:00 Beijing, off-peak otherwise) + per-model `multipliers` (default DeepSeek off-peak 0.5×) or absolute `levels` (level miss falls back to static rates; `enabled: false` restores fully static pricing).
+- **Time-of-day tier**: `schedule` (default DeepSeek peak Mon–Fri 09:00-12:00 / 14:00-18:00 Beijing, off-peak otherwise) + per-model `multipliers` (default DeepSeek off-peak 0.5×) or absolute `levels` (level miss falls back to static rates; `enabled: false` restores fully static pricing). Windows may carry an optional `days` list (ISO 1=Monday…7=Sunday; omitted = every day); a level with empty `windows` is the **catch-all fallback** (e.g. the default `offpeak`, which covers weekends). Cross-midnight windows anchor to their open day (evening part on `days` day, morning part on the next day).
 
 Lookup fallback chain (`src/dynamic-pricing/lookup.ts`): explicit `levels` → explicit `multipliers` → built-in DeepSeek default → static `state.provider` cost.
 

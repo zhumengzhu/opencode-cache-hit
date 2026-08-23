@@ -4,12 +4,14 @@ import {
   normalizeDisplayConfig,
   normalizeTimelineConfig,
   normalizeCacheTTLConfig,
+  normalizeDynamicPricingConfig,
   isToolSummaryEnabled,
   parseDuration,
   DEFAULT_PLUGIN_CONFIG,
   DEFAULT_TIMELINE,
   DEFAULT_CACHE_TTL,
 } from "../src/plugin-config.ts"
+import { DEFAULT_DYNAMIC_PRICING } from "../src/dynamic-pricing/types.ts"
 
 describe("normalizeDisplayConfig", () => {
   test("defaults lang en and panelBorder", () => {
@@ -237,5 +239,74 @@ describe("deep clone isolation", () => {
 
     expect(DEFAULT_CACHE_TTL.providers).toEqual({})
     expect(DEFAULT_CACHE_TTL.enabled).toBe(true)
+  })
+})
+
+describe("normalizeDynamicPricingConfig — schedule days + fallback", () => {
+  test("parses days:[1..5]", () => {
+    const c = normalizeDynamicPricingConfig({
+      schedule: [
+        { level: "peak", windows: [{ start: "09:00", end: "12:00", days: [1, 2, 3, 4, 5] }] },
+      ],
+    })
+    expect(c.schedule[0].windows[0].days).toEqual([1, 2, 3, 4, 5])
+  })
+  test("ignores invalid days values and warns", () => {
+    const c = normalizeDynamicPricingConfig({
+      schedule: [
+        { level: "peak", windows: [{ start: "09:00", end: "12:00", days: [0, 8, "mon", 2, 7] }] },
+      ],
+    })
+    expect(c.schedule[0].windows[0].days).toEqual([2, 7])
+  })
+  test("days: [] means all days (omitted)", () => {
+    const c = normalizeDynamicPricingConfig({
+      schedule: [
+        { level: "peak", windows: [{ start: "09:00", end: "12:00", days: [] }] },
+      ],
+    })
+    expect(c.schedule[0].windows[0].days).toBeUndefined()
+  })
+  test("empty windows level kept as fallback", () => {
+    const c = normalizeDynamicPricingConfig({
+      schedule: [
+        { level: "peak", windows: [{ start: "09:00", end: "12:00" }] },
+        { level: "offpeak", windows: [] },
+      ],
+    })
+    expect(c.schedule.length).toBe(2)
+    expect(c.schedule[0].level).toBe("peak")
+    expect(c.schedule[1]).toEqual({ level: "offpeak", windows: [] })
+  })
+  test("dedupes more than one fallback, keeps first, windowed levels first", () => {
+    const c = normalizeDynamicPricingConfig({
+      schedule: [
+        { level: "offpeak", windows: [] },
+        { level: "peak", windows: [{ start: "09:00", end: "12:00" }] },
+        { level: "night", windows: [] },
+      ],
+    })
+    expect(c.schedule.map((l) => l.level)).toEqual(["peak", "offpeak"])
+    expect(c.schedule[1].windows).toEqual([])
+  })
+  test("windowed level with all-invalid windows is dropped (not turned into fallback)", () => {
+    const c = normalizeDynamicPricingConfig({
+      schedule: [
+        { level: "peak", windows: [{ start: "oops", end: "12:00" }] },
+        { level: "offpeak", windows: [{ start: "18:00", end: "09:00" }] },
+      ],
+    })
+    expect(c.schedule.map((l) => l.level)).toEqual(["offpeak"])
+  })
+  test("default schedule is weekday-aware with fallback", () => {
+    const c = normalizeDynamicPricingConfig({})
+    const peak = c.schedule.find((l) => l.level === "peak")
+    expect(peak?.windows.every((w) => w.days?.length === 5)).toBe(true)
+    const offpeak = c.schedule.find((l) => l.level === "offpeak")
+    expect(offpeak?.windows).toEqual([])
+  })
+  test("invalid raw schedule falls back to defaults", () => {
+    const c = normalizeDynamicPricingConfig({ schedule: "nope" })
+    expect(c.schedule).toEqual(structuredClone(DEFAULT_DYNAMIC_PRICING.schedule))
   })
 })

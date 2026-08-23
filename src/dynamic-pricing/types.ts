@@ -1,12 +1,22 @@
 import type { ModelCost } from "../types.ts"
 
-/** 24h 时间窗口，单位：当天分钟数 [start, end)。end <= start 表示跨天（end 属次日）。 */
+/**
+ * 24h 时间窗口，单位：当天分钟数 [start, end)。end <= start 表示跨天（end 属次日）。
+ * `days`：适用星期（ISO，1=周一 … 7=周日）。省略或空数组 = 每天。
+ */
 export type TimeWindow = {
   start: number
   end: number
+  days?: number[]
 }
 
-/** 一个时段档（如 peak / offpeak）及其时间窗口。 */
+/**
+ * 一个时段档（如 peak / offpeak）及其时间窗口。
+ *
+ * `windows` 为空的 level 是「回退档」（catch-all 兜底），契约：永远 last-resort——
+ * isLevelAt 不将其纳入 first-match（即使写在数组首位），任何窗口级未命中时兜底；
+ * 全 schedule 至多 1 个（normalizeSchedule 负责重排至末尾并去重）。
+ */
 export type ScheduleLevel = {
   level: string
   windows: TimeWindow[]
@@ -48,10 +58,13 @@ export type DynamicPricingConfig = {
 }
 
 export const DEFAULT_SCHEDULE: DynamicPricingSchedule = [
-  // DeepSeek 官方高峰时段（北京时间）。
-  { level: "peak", windows: [{ start: 9 * 60, end: 12 * 60 }, { start: 14 * 60, end: 18 * 60 }] },
-  // 其余为空闲时段（跨天窗口覆盖 18:00 → 次日 09:00 与 12:00 → 14:00）。
-  { level: "offpeak", windows: [{ start: 18 * 60, end: 9 * 60 }, { start: 12 * 60, end: 14 * 60 }] },
+  // DeepSeek 官方高峰时段：北京时间周一~周五 9:00-12:00 / 14:00-18:00（周末为空闲）。
+  { level: "peak", windows: [
+    { start: 9 * 60, end: 12 * 60, days: [1, 2, 3, 4, 5] },
+    { start: 14 * 60, end: 18 * 60, days: [1, 2, 3, 4, 5] },
+  ] },
+  // 回退档（windows 为空）：其余全部（周末全天、工作日午餐 12-14 与夜间）为空闲。
+  { level: "offpeak", windows: [] },
 ]
 
 export const DEFAULT_DYNAMIC_PRICING: DynamicPricingConfig = {

@@ -2,7 +2,7 @@ import type { ModelCost, ProviderInfo } from "../types.ts"
 import { normalizeRuntimeCost, selectContextRates, scaleRates } from "./context.ts"
 import { DEEPSEEK_DEFAULT_RULE, isDeepSeek } from "./deepseek.ts"
 import { isLevelAt } from "./schedule.ts"
-import type { DynamicPricingConfig, ModelPricingRule } from "./types.ts"
+import { type DynamicPricingConfig, type ModelPricingRule } from "./types.ts"
 
 /** 静态价格查询：providerID + modelID → ModelCost（运行时 tiers 已归一化），未命中返回 null。 */
 export function lookupModelCost(
@@ -33,6 +33,27 @@ export type ResolvedPricing = {
   contextTier?: "base" | "over"
   /** 是否应用了动态规则（显式配置 / 内置 DeepSeek 默认）。 */
   explicit: boolean
+}
+
+/** 已提示过「DeepSeek schedule 无 days」的 providerID/modelID（每配置生命周期仅一次）。 */
+const warnedNoWeekday = new Set<string>()
+
+/**
+ * DeepSeek 且 schedule 存在窗口级档但均未写 `days` → 一次性 stderr 提示（仅提示，不改计费结果）。
+ * 旧配置（peak 无 days）周末仍按高峰计费，需手动补 `days:[1,2,3,4,5]`。
+ */
+function maybeWarnDeepSeekWeekend(rules: DynamicPricingConfig | undefined, providerID: string, modelID: string): void {
+  if (!rules?.enabled || !isDeepSeek(providerID, modelID)) return
+  const hasWindowed = rules.schedule.some((l) => l.windows.length > 0)
+  const hasDays = rules.schedule.some((l) => l.windows.some((w) => w.days && w.days.length > 0))
+  if (!(hasWindowed && !hasDays)) return
+  const key = `${providerID}/${modelID}`
+  if (warnedNoWeekday.has(key)) return
+  warnedNoWeekday.add(key)
+  console.warn(
+    `[dynamicPricing] ${key} 的 schedule 未按星期区分 —— 周末 9:00-12:00/14:00-18:00 仍可能按高峰计费。` +
+      `请在 peak 窗口加 "days":[1,2,3,4,5] 以匹配 DeepSeek 周末空闲定价。`,
+  )
 }
 
 function effectiveRule(
@@ -82,6 +103,7 @@ export function resolveModelCost(
   const now = ctx.now ?? Date.now()
   const rules = ctx.rules
   const level = resolveLevel(now, rules)
+  maybeWarnDeepSeekWeekend(rules, providerID, modelID)
   const rule = effectiveRule(rules, providerID, modelID)
   // 分档阈值优先级：模型级配置 rule.contextThreshold > 运行时 tier.size（cost.contextThreshold）
   // > 全局 contextThreshold > 默认 200k。统一到 base 上，保证 tierOf 与 selectContextRates 口径一致。
@@ -101,8 +123,12 @@ export function resolveModelCost(
   }
   if (rule?.multipliers) {
     const factor = level ? rule.multipliers[level] ?? 1 : 1
-    return { rates: scaleRates(selectContextRates(effBase, ctx.contextTokens, effThreshold), factor), level, contextTier, explicit: true }
+    // 仅当 multipliers 含当前档时才标注（如只配了 peak 的模型，offpeak 时刻价格=1× 全价，不贴「空闲」）。
+    const levelShown = level !== undefined && rule.multipliers[level] !== undefined
+    return { rates: scaleRates(selectContextRates(effBase, ctx.contextTokens, effThreshold), factor), level: levelShown ? level : undefined, contextTier, explicit: true }
   }
-  // 显式配置了该模型（含仅 contextThreshold）→ 视为动态规则生效。
-  return { rates: selectContextRates(effBase, ctx.contextTokens, effThreshold), level, contextTier, explicit: rule !== undefined }
+  // 仅当该模型真正按时段计价（显式 levels/multipliers 或内置 DeepSeek 默认）时才报告 level；
+  // 无规则或仅 contextThreshold 的模型不标注时段档（避免默认回退档给静态价模型贴上「空闲/peak」）。
+  const levelAware = rule?.levels !== undefined || rule?.multipliers !== undefined
+  return { rates: selectContextRates(effBase, ctx.contextTokens, effThreshold), level: levelAware ? level : undefined, contextTier, explicit: rule !== undefined }
 }

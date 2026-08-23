@@ -9,7 +9,9 @@
  *   bun scripts/fetch-deepseek-pricing.ts --url <mirror>  # custom page URL
  *
  * Output is JSON you can merge into cache-hit.json under "dynamicPricing":
- *   "dynamicPricing": { ...existing..., <printed "providers" object> }
+ *   "dynamicPricing": { ...existing..., <printed "schedule" and "providers" objects> }
+ * The printed schedule is weekday-aware (peak Mon-Fri, offpeak catch-all fallback)
+ * to match DeepSeek's official weekend-idle pricing.
  */
 
 // Make this file a module for TS tooling (top-level await below).
@@ -74,6 +76,15 @@ try {
   const groups = parsePriceGroups(html)
   const unit = useUsd ? `USD (÷${rate})` : "CNY"
   const snippet = {
+    // DeepSeek 官方高峰：北京时间周一~周五 9:00-12:00 / 14:00-18:00；其余（含周末）为空闲。
+    // 旧写法（peak 无 days）周末仍按高峰，请保留 days:[1,2,3,4,5]。
+    schedule: [
+      { level: "peak", windows: [
+        { start: "09:00", end: "12:00", days: [1, 2, 3, 4, 5] },
+        { start: "14:00", end: "18:00", days: [1, 2, 3, 4, 5] },
+      ] },
+      { level: "offpeak", windows: [] }, // 回退档：一切未覆盖时刻（含周末）为空闲
+    ],
     providers: {
       "deepseek": {
         models: {

@@ -209,20 +209,23 @@ jq -r 'select(.rootSessionId=="YOUR_ROOT") | [.created,.scope,.hitPercent,.cost]
 
 ### 动态计价（`dynamicPricing`，默认开启）
 
-模型单价通常为 OpenCode provider 注册表中的静态 USD/百万 token。部分模型按**时段**计价（DeepSeek V4：高峰 09:00-12:00 / 14:00-18:00 北京时间，空闲半价），或按**上下文大小**分档（`context_over_200k`，如 GPT-5.6：超过 200k token 单价约翻倍）。
+模型单价通常为 OpenCode provider 注册表中的静态 USD/百万 token。部分模型按**时段**计价（DeepSeek V4：高峰为北京时间**周一至周五** 09:00-12:00 / 14:00-18:00，空闲半价；**周末为空闲**），或按**上下文大小**分档（`context_over_200k`，如 GPT-5.6：超过 200k token 单价约翻倍）。
 
 零配置时插件已自动：
 
 - 读取 `state.provider` 中模型的上下文档位（运行时 `tiers` / `experimentalOver200K`，内部归一化），按总上下文（输入 + 缓存读）与阈值显示对应档位。
-- 时段匹配时对 DeepSeek 模型应用内置空闲 0.5× 倍率。
+- 时段匹配时对 DeepSeek 模型应用内置空闲 0.5× 倍率（高峰仅限工作日，周末落入空闲回退档）。
 
 ```json
 "dynamicPricing": {
   "enabled": true,
   "timezone": "Asia/Shanghai",
   "schedule": [
-    { "level": "peak",    "windows": [{"start": "09:00", "end": "12:00"}, {"start": "14:00", "end": "18:00"}] },
-    { "level": "offpeak", "windows": [{"start": "18:00", "end": "09:00"}, {"start": "12:00", "end": "14:00"}] }
+    { "level": "peak", "windows": [
+      { "start": "09:00", "end": "12:00", "days": [1, 2, 3, 4, 5] },
+      { "start": "14:00", "end": "18:00", "days": [1, 2, 3, 4, 5] }
+    ] },
+    { "level": "offpeak", "windows": [] }
   ],
   "contextThreshold": 200000,
   "providers": {
@@ -241,7 +244,7 @@ jq -r 'select(.rootSessionId=="YOUR_ROOT") | [.created,.scope,.hitPercent,.cost]
 |------|--------|------|
 | `enabled` | `true` | 总开关。设为 `false` 恢复完全静态计价 |
 | `timezone` | `Asia/Shanghai` | 时段匹配所用 IANA 时区（DeepSeek 按北京时间计价） |
-| `schedule` | DeepSeek 高峰/空闲 | `{level, windows:[{start,end}]}` 列表；`HH:MM` 格式，支持跨天窗口 |
+| `schedule` | DeepSeek 高峰/空闲 | `{level, windows:[{start,end,days?}]}` 列表；`HH:MM` 格式，支持跨天窗口。`days` 为可选 ISO 星期列表（1=周一 … 7=周日）；省略或 `[]` = 每天。**`windows` 为空的 level 是「回退档」**：任何窗口级未命中时兜底生效（如默认 schedule 的周末） |
 | `contextThreshold` | `200000` | 上下文档位的 token 阈值；模型级 `contextThreshold` 优先于 `state.provider` 的运行时档位阈值 |
 | `providers` | `{}` | 按 `providerID` → `modelID` 的规则 |
 
@@ -251,11 +254,14 @@ jq -r 'select(.rootSessionId=="YOUR_ROOT") | [.created,.scope,.hitPercent,.cost]
 - `levels`：各时段档的绝对单价，如 `{"peak": {"input": 0.44, "output": 0.88, "cacheRead": 0.01}, "offpeak": {"input": 0.22, ...}}`。缓存单价可写为扁平 `cacheRead`/`cacheWrite`（或 `cache_read`/`cache_write`），也可写为嵌套 `cache: {"read": …, "write": …}`（两种都接受；同时存在时扁平优先）。默认单位为 **USD/百万 token**（与 `state.provider` 一致）。想用其他币种写价时设 `"currency": "CNY"`：要么与展示币种 `cost.currency` 一致（按 `cost.rate` 换算），要么提供模型级 `"rate"`（USD → 该币种，如 EUR 填 1.08）。无法换算时（无 `rate` 且币种 ≠ 展示币种）向 stderr 告警并按 USD 处理。`multipliers` 是倍率，无币种概念。
 - `contextThreshold`：覆盖全局阈值的模型级配置（优先于 `state.provider` 的运行时档位阈值）。
 
-侧边栏单价会在时段边界自动切换（无需轮询）。会话成本在动态规则生效时按每条消息的请求时刻 + 上下文档位重算（标注 `≈`）；否则使用 OpenCode 自身的 `msg.cost`。子 agent 行按其**会话创建时刻**（`session.list`）做时段计价（任一子会话被重算时 Agents 合计标注 `≈`）。
+侧边栏单价会在时段边界自动切换（无需轮询）。单价行的 `peak`/`offpeak` 徽标**仅在该模型对当前时段档有定价时**显示（当前档存在于其显式 `levels`/`multipliers` 中，或内置 DeepSeek 默认生效）；纯静态价模型、以及未定价的档（如只配 peak 的模型在 offpeak 时刻）不标注。会话成本在动态规则生效时按每条消息的请求时刻 + 上下文档位重算（标注 `≈`）；否则使用 OpenCode 自身的 `msg.cost`。子 agent 行按其**会话创建时刻**（`session.list`）做时段计价（任一子会话被重算时 Agents 合计标注 `≈`）。
+
+> [!NOTE]
+> **迁移提示（星期感知 schedule）**。schedule 现支持可选 `days` 字段（ISO 星期，1=周一 … 7=周日；省略 = 每天）与「**回退档**」（`windows` 为空的 level）。DeepSeek 官方高峰为**周一至周五**北京时间 09:00-12:00 / 14:00-18:00，周末为空闲。内置默认 schedule 已是星期感知写法，上方示例亦然；**未写 `days` 的旧配置保持原语义——周末仍按高峰计费**。要修复，请为 `peak` 窗口补 `"days": [1,2,3,4,5]`（或改用含 `offpeak` 回退档的新默认 schedule）。若你解析 DeepSeek 模型时配置的 schedule 存在窗口级档但均未写 `days`，插件会向 stderr 输出一次性提示。
 
 **时间轴看板**（[docs/zh-CN/timeline.md](docs/zh-CN/timeline.md)）也会离线重算成本：读取 `~/.config/opencode/opencode.json`（支持 JSONC 注释）获取 provider 单价，逐条注入 `dynCost`（与原值不同时以 `≈` 展示，并计入图表与合计）。
 
-**刷新 DeepSeek 官方价**：`bun scripts/fetch-deepseek-pricing.ts` 输出可直接粘贴的 `dynamicPricing.providers` 片段（默认人民币并带 `"currency": "CNY"`，`--usd --rate 6.77` 转美元）。
+**刷新 DeepSeek 官方价**：`bun scripts/fetch-deepseek-pricing.ts` 输出可直接粘贴的 `dynamicPricing` 片段（星期感知 `schedule`：peak 仅周一~周五 + offpeak 回退档；`providers` 默认人民币并带 `"currency": "CNY"`，`--usd --rate 6.77` 转美元）。
 
 ## 更新
 

@@ -1,7 +1,5 @@
 import type { DynamicPricingSchedule, TimeWindow } from "./types.ts"
 
-const MINUTES_PER_DAY = 24 * 60
-
 /** "09:00" → 540；"18:30" → 1110。非法输入返回 null。 */
 export function parseClockTime(raw: string): number | null {
   const m = raw.match(/^(\d{1,2}):(\d{2})$/)
@@ -12,10 +10,28 @@ export function parseClockTime(raw: string): number | null {
   return h * 60 + min
 }
 
-export function inWindow(dayMinute: number, w: TimeWindow): boolean {
-  if (w.start <= w.end) return dayMinute >= w.start && dayMinute < w.end
-  // 跨天窗口：[start, 24:00) ∪ [00:00, end)
-  return dayMinute >= w.start || dayMinute < w.end
+/** ISO 星期（1=周一…7=周日）的前一日，回绕（周一的前一日是周日）。 */
+function prevWeekday(weekday: number): number {
+  return ((weekday - 2 + 7) % 7) + 1
+}
+
+/** 窗口是否每天适用（`days` 省略或空数组）。 */
+function isEveryDayWindow(w: TimeWindow): boolean {
+  return !w.days || w.days.length === 0
+}
+
+export function inWindow(dayMinute: number, weekday: number, w: TimeWindow): boolean {
+  const anyDay = isEveryDayWindow(w)
+  if (w.start <= w.end) {
+    // 非跨天：仅当日；days 作用于「当日」。
+    if (!anyDay && !w.days.includes(weekday)) return false
+    return dayMinute >= w.start && dayMinute < w.end
+  }
+  // 跨天窗口锚定「开启日」：晚间段 [start, 24:00) 归属 weekday；
+  // 早晨段 [00:00, end) 由前一日开启（weekday 的前一日，回绕）。
+  if (dayMinute >= w.start) return anyDay || w.days.includes(weekday)
+  const prev = prevWeekday(weekday)
+  return dayMinute < w.end && (anyDay || w.days.includes(prev))
 }
 
 export type TzParts = {
@@ -81,9 +97,18 @@ export function dayMinuteOf(ts: number, timezone: string): number {
   return p.hour * 60 + p.minute + p.second / 60
 }
 
+/** 指定时区下该时刻的 ISO 星期（1=周一 … 7=周日）。 */
+export function tzWeekdayOf(ts: number, timezone: string): number {
+  const p = tzPartsOf(ts, timezone)
+  // Date.getUTCDay()：0=周日…6=周六 → ISO 1=周一…7=周日。
+  const dow = new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay()
+  return ((dow + 6) % 7) + 1
+}
+
 /**
- * 判定 now 命中的时段档名（按 schedule 顺序，首个匹配）。
- * schedule 为空或未命中 → undefined。
+ * 判定 now 命中的时段档名（按 schedule 顺序，首个匹配的窗口级）。
+ * 回退档契约见 types.ts ScheduleLevel：last-resort，不参与 first-match。
+ * schedule 为空或窗口级与回退档均未命中 → undefined。
  */
 export function isLevelAt(
   now: number,
@@ -92,34 +117,59 @@ export function isLevelAt(
 ): string | undefined {
   if (schedule.length === 0) return undefined
   const min = dayMinuteOf(now, timezone)
+  const weekday = tzWeekdayOf(now, timezone)
+  let fallback: string | undefined
   for (const lvl of schedule) {
+    if (lvl.windows.length === 0) {
+      fallback = lvl.level
+      continue
+    }
     for (const w of lvl.windows) {
-      if (inWindow(min, w)) return lvl.level
+      if (inWindow(min, weekday, w)) return lvl.level
     }
   }
-  return undefined
+  return fallback
 }
 
 /**
- * 距下一个时段窗口边界（任一 level 任一 window 的 start/end）的毫秒数。
- * 用于精确调度 UI 刷新；无任何边界时返回 24h。
+ * 距下一个时段窗口边界的毫秒数（任一 level 任一 window 的 start/end）。
+ * 星期感知：自 now 所在日向前扫描最多 7 天，只收集「该日承载」的边界
+ * （同天窗口的 start/end 落在开启日；跨天窗口的 start 落在开启日、end 落在次日），
+ * 因此周五 18:00 的下一边界会跳过周末直达周一 09:00。
+ * 无任何窗口级时返回 24h。
  */
 export function nextBoundaryMs(
   now: number,
   schedule: DynamicPricingSchedule,
   timezone: string,
 ): number {
-  const todayMin = dayMinuteOf(now, timezone)
   let best = Number.POSITIVE_INFINITY
-  for (const lvl of schedule) {
-    for (const w of lvl.windows) {
-      for (const m of [w.start, w.end]) {
-        let dayOffset = 0
-        if (m <= todayMin) dayOffset = 1 // 当天该边界已过 → 次日
-        const boundaryMs = startOfDayEpoch(now, timezone) + (m + dayOffset * MINUTES_PER_DAY) * 60_000
-        if (boundaryMs > now) best = Math.min(best, boundaryMs - now)
+  const t0 = startOfDayEpoch(now, timezone)
+  for (let d = 0; d <= 7; d++) {
+    const dayStart = t0 + d * 86_400_000
+    const wd = tzWeekdayOf(dayStart, timezone)
+    for (const lvl of schedule) {
+      for (const w of lvl.windows) {
+        for (const m of [w.start, w.end]) {
+          const b = dayStart + m * 60_000
+          if (b > now && boundaryCarriedByDay(m, wd, w)) {
+            best = Math.min(best, b - now)
+          }
+        }
       }
     }
   }
-  return Number.isFinite(best) ? best : MINUTES_PER_DAY * 60_000
+  return Number.isFinite(best) ? best : 86_400_000
+}
+
+/** 边界分钟 m 是否由 weekday 当日承载（见 nextBoundaryMs 注释）。 */
+function boundaryCarriedByDay(m: number, weekday: number, w: TimeWindow): boolean {
+  if (w.start <= w.end) {
+    // 同天窗口：开启日当天承载 start 与 end 两个边界。
+    return isEveryDayWindow(w) || w.days.includes(weekday)
+  }
+  // 跨天窗口：start 由开启日承载；end 落在次日，由「开启日的次日」承载。
+  const anyDay = isEveryDayWindow(w)
+  if (m === w.start) return anyDay || w.days.includes(weekday)
+  return anyDay || w.days.includes(prevWeekday(weekday))
 }
