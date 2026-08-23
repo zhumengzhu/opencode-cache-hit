@@ -29,8 +29,9 @@ import type { ProviderInfo } from "../src/types.ts"
 import { parseJsonc } from "../src/jsonc.ts"
 
 /**
- * 从 opencode.json 的 `provider` 段加载静态价格（含 context_over_200k），
- * 供离线重算使用。文件不存在返回空数组；文件存在但解析失败时告警后返回空数组。
+ * Load static prices (incl. context_over_200k) from the `provider` section of
+ * opencode.json for offline recompute. Missing file → empty array; parse failure
+ * warns and returns an empty array.
  */
 function loadOpencodeProviders(): ProviderInfo[] {
   const path = process.env.OPENCODE_CONFIG ?? `${homedir()}/.config/opencode/opencode.json`
@@ -781,7 +782,7 @@ if (records.length === 0) {
   process.exit(1)
 }
 
-// 动态计价离线重算：按每条记录的时刻 + 上下文档位注入 dynCost（前端优先展示）。
+// Offline dynamic-pricing recompute: inject dynCost per record (time + context tier); the UI prefers it when present.
 {
   const providers = loadOpencodeProviders()
   const rules = loadPluginConfig().dynamicPricing

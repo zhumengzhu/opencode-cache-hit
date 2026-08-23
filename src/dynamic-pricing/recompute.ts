@@ -4,22 +4,22 @@ import { resolveModelCost } from "./lookup.ts"
 import type { DynamicPricingConfig } from "./types.ts"
 
 export type RecomputeResult = {
-  /** 按每条消息的请求时刻 + 上下文大小重算的总成本（USD）。 */
+  /** Total cost recomputed per message (request time + context size), in USD. */
   cost: number
-  /** 参与重算的消息数（有 tokens 且有价格）。 */
+  /** Number of messages included (have tokens and a price). */
   counted: number
-  /** 是否有任何消息应用了动态规则（时段 / 上下文分档 / 倍率）。 */
+  /** Whether any message applied dynamic rules (time-of-day / context tier / multipliers). */
   dynamic: boolean
 }
 
 const EMPTY_RESULT: RecomputeResult = { cost: 0, counted: 0, dynamic: false }
 
 /**
- * 逐条重算会话成本：
- * - 时段：`msg.time.created`（请求发起时刻）→ 命中时段档
- * - 上下文：总输入（`input + cacheRead`，openCode 语义下 input 不含缓存）→ context_over_200k 分档
- * - 用量：input / output / cache.read / cache.write（input 为未命中部分，缓存单独计费）
- * 无法定价的消息（无 tokens 或无模型价格）跳过。所有消息均不可定价 → null。
+ * Recompute session cost message by message:
+ * - time-of-day: `msg.time.created` (request start) → level
+ * - context: total input (`input + cacheRead`; opencode semantics: input excludes cache) → context_over_200k tier
+ * - usage: input / output / cache.read / cache.write (input is the cache-miss part; cache billed separately)
+ * Messages that cannot be priced (no tokens or no model price) are skipped. Nothing priceable → null.
  */
 export function recomputeSessionCost(
   messages: ReadonlyArray<AssistantMessage>,
@@ -53,15 +53,16 @@ export function recomputeSessionCost(
 }
 
 /**
- * 子 agent 成本重算：用聚合 tokens + 会话创建时刻（`sub.created`）近似逐条重算。
- * 无 created 或模型不可定价 → null（调用方回退 msg.cost，不按时段猜测）。
+ * Sub-agent cost recompute: aggregate tokens + session creation time (`sub.created`)
+ * as a per-message approximation. No created or unpriced model → null (caller falls
+ * back to msg.cost rather than guessing a level).
  */
 export function recomputeSubAgentCost(
   sub: SubAgentSummary,
   providers: ReadonlyArray<ProviderInfo>,
   rules: DynamicPricingConfig | undefined,
 ): number | null {
-  // 无创建时刻 → 无法按时段定价，回退 msg.cost（调用方处理）。
+  // No creation time → cannot price by level; caller falls back to msg.cost.
   if (sub.created === undefined) return null
   const input = sub.input
   const output = sub.output
@@ -78,8 +79,8 @@ export function recomputeSubAgentCost(
 }
 
 /**
- * timeline 记录离线重算：按记录时刻（`created`）+ 上下文档位重算成本。
- * 无 providerId 时按 modelId 在各 provider 中匹配；不可定价 → null。
+ * Offline recompute for timeline records: by record time (`created`) + context tier.
+ * Without providerId, match modelId across providers; unpriced → null.
  */
 export function recomputeRecordCost(
   record: {

@@ -51,12 +51,12 @@ export type ModelCost = {
   output: number
   cache: { read: number; write: number }
   /**
-   * 上下文分档价格（阈值见 `contextThreshold`，默认 200k）。
-   * 兼容两处来源：opencode.json 配置层的 `context_over_200k`，
-   * 以及运行时 `state.provider` 的 `tiers`/`experimentalOver200K`（由 normalizeRuntimeCost 归一化）。
+   * Context-tier price (threshold: `contextThreshold`, default 200k).
+   * Accepts two sources: config-level `context_over_200k` in opencode.json, and
+   * runtime `tiers`/`experimentalOver200K` from `state.provider` (normalized by normalizeRuntimeCost).
    */
   context_over_200k?: ModelCost
-  /** 该分档的阈值（token 数）；来自运行时 tier.size，缺省用全局 contextThreshold。 */
+  /** This tier's threshold (tokens); from runtime tier.size, falls back to the global contextThreshold. */
   contextThreshold?: number
 }
 

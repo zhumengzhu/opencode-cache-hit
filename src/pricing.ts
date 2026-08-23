@@ -12,11 +12,11 @@ export type PricingInfo = {
   cacheReadRate: number
   cacheWriteRate: number
   saved: number
-  /** 命中的时段档名（如 "peak"/"offpeak"）；未启用时段规则时为 undefined。 */
+  /** Matched time-of-day level (e.g. "peak"/"offpeak"); undefined when time-of-day rules are off. */
   level?: string
-  /** 上下文分档：基础档 "base" 或超阈值档 "over"；模型无分档时 undefined。 */
+  /** Context tier: "base" or over-threshold "over"; undefined when the model has no tiers. */
   contextTier?: "base" | "over"
-  /** 是否应用了动态规则（用户配置 / 内置 DeepSeek 默认）。 */
+  /** Whether dynamic rules applied (user config / built-in DeepSeek default). */
   dynamic: boolean
 }
 
@@ -30,11 +30,11 @@ export const EMPTY_PRICING: PricingInfo = {
 }
 
 export type PricingContext = {
-  /** 当前时刻（ms），用于时段判定。默认 Date.now()。 */
+  /** Current time (ms) for time-of-day matching. Default Date.now(). */
   now?: number
-  /** 上下文大小（token 数），用于 context_over_200k 分档判定。 */
+  /** Context size (tokens) for context_over_200k tier selection. */
   contextTokens?: number
-  /** 动态计价配置；缺省时完全回退静态价。 */
+  /** Dynamic pricing config; when omitted, fully static pricing. */
   rules?: DynamicPricingConfig
 }
 

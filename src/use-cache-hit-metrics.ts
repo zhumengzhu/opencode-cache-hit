@@ -63,9 +63,10 @@ export function useCacheHitMetrics(props: {
   const perCall = createMemo(() => computePerCallHitTrend(props.messages()))
   const sessionRatio = createMemo(() => cacheHitRatio(main().cacheRead, main().input))
 
-  // 动态计价：跨时段边界精确刷新（无需每秒轮询）。
-  // 单一 timer 引用 + 组件 owner 级 onCleanup：递归安排的后续 timer 在卸载时一并清理
-  // （不能在 setTimeout 回调内注册 onCleanup——已脱离 Solid owner，卸载不触发）。
+  // Dynamic pricing: precise refresh at schedule boundaries (no polling).
+  // Single timer ref + component-owner onCleanup: recursively scheduled timers are
+  // cleaned up on unmount (onCleanup inside the setTimeout callback would be outside
+  // the Solid owner and never fire on unmount).
   const [now, setNow] = createSignal(Date.now())
   let boundaryTimer: ReturnType<typeof setTimeout> | undefined
   const scheduleBoundary = () => {
@@ -91,7 +92,7 @@ export function useCacheHitMetrics(props: {
     }),
   )
 
-  // 子 agent 缓存节省：按当前时段 + 各子会话总输入（input + cacheRead）判定档位。
+  // Sub-agent cache savings: level by current time-of-day + each child's total input (input + cacheRead).
   const subsSaved = createMemo(() =>
     computeSubsSaved(subs(), props.providers(), {
       now: now(),
@@ -99,12 +100,12 @@ export function useCacheHitMetrics(props: {
     }),
   )
 
-  // 动态成本重算（按每条消息的请求时刻 + 上下文分档）；不可定价时回退 null。
+  // Dynamic cost recompute (per-message request time + context tier); unpriced → null.
   const recomputedCost = createMemo(() =>
     recomputeSessionCost(props.messages(), props.providers(), props.dynamicPricing),
   )
 
-  // 子 agent 动态成本（按其会话创建时刻 + 聚合 tokens 近似）；无 created / 不可定价 → null。
+  // Sub-agent dynamic cost (session creation time + aggregate tokens); no created / unpriced → null.
   const subAgentDynamicCosts = createMemo(() => {
     const rules = props.dynamicPricing
     const providers = props.providers()

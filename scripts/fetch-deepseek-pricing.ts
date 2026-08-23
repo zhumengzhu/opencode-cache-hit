@@ -76,14 +76,14 @@ try {
   const groups = parsePriceGroups(html)
   const unit = useUsd ? `USD (÷${rate})` : "CNY"
   const snippet = {
-    // DeepSeek 官方高峰：北京时间周一~周五 9:00-12:00 / 14:00-18:00；其余（含周末）为空闲。
-    // 旧写法（peak 无 days）周末仍按高峰，请保留 days:[1,2,3,4,5]。
+    // DeepSeek official peak: Beijing time Mon-Fri 9:00-12:00 / 14:00-18:00; everything else (incl. weekends) is off-peak.
+    // Legacy configs (peak without days) still bill weekends as peak — keep days:[1,2,3,4,5].
     schedule: [
       { level: "peak", windows: [
         { start: "09:00", end: "12:00", days: [1, 2, 3, 4, 5] },
         { start: "14:00", end: "18:00", days: [1, 2, 3, 4, 5] },
       ] },
-      { level: "offpeak", windows: [] }, // 回退档：一切未覆盖时刻（含周末）为空闲
+      { level: "offpeak", windows: [] }, // Fallback: everything unmatched (incl. weekends) is off-peak
     ],
     providers: {
       "deepseek": {

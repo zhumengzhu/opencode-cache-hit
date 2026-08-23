@@ -113,7 +113,7 @@ export type PluginConfig = {
   display: DisplayConfig
   timeline: TimelineConfig
   cacheTTL: CacheTTLConfig
-  /** 动态计价：时段（peak/offpeak）与上下文分档（context_over_200k）。 */
+  /** Dynamic pricing: time-of-day (peak/offpeak) and context tiers (context_over_200k). */
   dynamicPricing: DynamicPricingConfig
 }
 
@@ -263,7 +263,7 @@ function normalizeModelPricingRule(raw: unknown): ModelPricingRule {
       const lv = v as Record<string, unknown> | undefined
       if (!lv || typeof lv !== "object") continue
       const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0)
-      // 兼容两种写法：扁平 cacheRead/cacheWrite（文档/示例）与嵌套 cache:{read,write}（ModelCost 类型）。
+      // Accept both shapes: flat cacheRead/cacheWrite (docs/example) and nested cache:{read,write} (ModelCost type).
       const nestCache = lv.cache as { read?: unknown; write?: unknown } | undefined
       out[level] = {
         input: num(lv.input),
@@ -290,7 +290,7 @@ function normalizeModelPricingRule(raw: unknown): ModelPricingRule {
   return rule
 }
 
-/** 解析 `days`（ISO 1=周一…7=周日）：过滤非法值并告警、去重、排序；空/非法结果 = 全周（省略）。 */
+/** Parse `days` (ISO 1=Monday…7=Sunday): filter invalid values with a warning, dedupe, sort; empty/invalid result = every day (omitted). */
 function normalizeDays(raw: unknown): number[] | undefined {
   if (!Array.isArray(raw)) return undefined
   const seen = new Set<number>()
@@ -314,7 +314,7 @@ function normalizeSchedule(raw: unknown): DynamicPricingSchedule {
     const o = item as Record<string, unknown> | undefined
     if (!o || typeof o !== "object") continue
     if (typeof o.level !== "string" || !Array.isArray(o.windows)) continue
-    // 显式空 windows 的 level = 回退档（兜底）。
+    // A level with explicit empty windows is the catch-all fallback.
     if (o.windows.length === 0) {
       out.push({ level: o.level, windows: [] })
       continue
@@ -330,10 +330,10 @@ function normalizeSchedule(raw: unknown): DynamicPricingSchedule {
         return days ? { start, end, days } : { start, end }
       })
       .filter((w): w is TimeWindow => w !== null)
-    // 窗口全部非法 → 整档丢弃（与旧行为一致，避免 typo 配置静默变为兜底档）。
+    // All windows invalid → drop the level (matches legacy behavior; a typo'd config must not silently become a fallback).
     if (windows.length > 0) out.push({ level: o.level, windows })
   }
-  // 回退档至多 1 个（契约见 types.ts ScheduleLevel）：截断多余的空 windows 档，windowed 档保持原顺序。
+  // At most one fallback (contract: types.ts ScheduleLevel): truncate extra empty-windows levels; windowed levels keep their order.
   const windowed = out.filter((l) => l.windows.length > 0)
   const fallbacks = out.filter((l) => l.windows.length === 0)
   if (fallbacks.length > 1) {
@@ -369,9 +369,10 @@ export function normalizeDynamicPricingConfig(
       const models: Record<string, ModelPricingRule> = {}
       for (const [mid, mv] of Object.entries(modelsRaw as Record<string, unknown>)) {
         const rule = normalizeModelPricingRule(mv)
-        // 非 USD 的 levels 绝对价在加载时换算为内部 USD 口径，lookup 恒按 USD 计算。
-        // 汇率（USD → levels 币种）优先级：rule.rate > levelsCurrency===展示币种时 cost.rate
-        // > 无法推断时告警并视作 USD（避免用错误的展示汇率换算，如 EUR 除 USD→CNY）。
+        // Non-USD absolute levels are converted to internal USD at load; lookup always computes in USD.
+        // Rate (USD → levels currency) priority: rule.rate > cost.rate when the levels currency
+        // equals the display currency > warn and treat as USD when undeterminable (avoids converting
+        // with a wrong display rate, e.g. dividing EUR by USD→CNY).
         if (rule.levels && rule.currency && rule.currency !== "USD") {
           let usdPerLevel: number | undefined = rule.rate
           if (usdPerLevel === undefined && rule.currency === opts?.displayCurrency && opts?.usdRate && opts.usdRate > 0) {
@@ -407,9 +408,10 @@ export function normalizePluginConfig(raw: unknown): PluginConfig {
   const o = raw as Record<string, unknown>
   const cost = normalizeCostDisplay(raw)
   const displayRaw = o.display
-  // levels 非 USD 绝对价按展示汇率换算为内部 USD。可用汇率：模型级 rule.rate
-  // （USD → levels 币种）；或当 levels 币种与展示币种相同时，回退使用 cost.rate。
-  // 显示 USD、levels 为 CNY 等币种时两者不匹配，需要显式配置模型级 rate。
+  // Non-USD absolute levels are converted to internal USD at the display rate. Usable
+  // rates: per-model rule.rate (USD → levels currency); or cost.rate when the levels
+  // currency equals the display currency. When the display is USD but levels are CNY
+  // etc., the two don't match — a per-model rate must be configured explicitly.
   const usdRate =
     cost.currency === "USD" ? (DEFAULT_COST_DISPLAY.rate ?? 6.77) : resolveExchangeRate(cost)
   return {

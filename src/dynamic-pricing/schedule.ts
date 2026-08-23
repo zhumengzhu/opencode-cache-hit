@@ -1,6 +1,6 @@
 import type { DynamicPricingSchedule, TimeWindow } from "./types.ts"
 
-/** "09:00" → 540；"18:30" → 1110。非法输入返回 null。 */
+/** "09:00" → 540; "18:30" → 1110. Invalid input returns null. */
 export function parseClockTime(raw: string): number | null {
   const m = raw.match(/^(\d{1,2}):(\d{2})$/)
   if (!m) return null
@@ -10,12 +10,12 @@ export function parseClockTime(raw: string): number | null {
   return h * 60 + min
 }
 
-/** ISO 星期（1=周一…7=周日）的前一日，回绕（周一的前一日是周日）。 */
+/** Previous ISO weekday (1=Monday…7=Sunday), wrapping (Monday's previous day is Sunday). */
 function prevWeekday(weekday: number): number {
   return ((weekday - 2 + 7) % 7) + 1
 }
 
-/** 窗口是否每天适用（`days` 省略或空数组）。 */
+/** Whether the window applies every day (`days` omitted or empty). */
 function isEveryDayWindow(w: TimeWindow): boolean {
   return !w.days || w.days.length === 0
 }
@@ -23,12 +23,12 @@ function isEveryDayWindow(w: TimeWindow): boolean {
 export function inWindow(dayMinute: number, weekday: number, w: TimeWindow): boolean {
   const anyDay = isEveryDayWindow(w)
   if (w.start <= w.end) {
-    // 非跨天：仅当日；days 作用于「当日」。
+    // Same-day window: current day only; days filters the current day.
     if (!anyDay && !w.days.includes(weekday)) return false
     return dayMinute >= w.start && dayMinute < w.end
   }
-  // 跨天窗口锚定「开启日」：晚间段 [start, 24:00) 归属 weekday；
-  // 早晨段 [00:00, end) 由前一日开启（weekday 的前一日，回绕）。
+  // Cross-midnight windows anchor to their open day: the evening part [start, 24:00)
+  // belongs to weekday; the morning part [00:00, end) is opened by the previous day.
   if (dayMinute >= w.start) return anyDay || w.days.includes(weekday)
   const prev = prevWeekday(weekday)
   return dayMinute < w.end && (anyDay || w.days.includes(prev))
@@ -38,7 +38,7 @@ export type TzParts = {
   year: number
   month: number // 1-12
   day: number
-  hour: number // 0-23（"24:xx" 已归一化）
+  hour: number // 0-23 ("24:xx" normalized)
   minute: number
   second: number
 }
@@ -63,7 +63,7 @@ function tzFormatter(timezone: string): Intl.DateTimeFormat {
   return f
 }
 
-/** 取某时刻在指定时区的日历字段（hour "24" 归一化为次日 0 点）。 */
+/** Calendar fields of a timestamp in the given timezone (hour "24" normalized to next-day 00:00). */
 export function tzPartsOf(ts: number, timezone: string): TzParts {
   const parts = Object.fromEntries(
     tzFormatter(timezone).formatToParts(new Date(ts)).map((p) => [p.type, p.value]),
@@ -84,31 +84,31 @@ export function tzPartsOf(ts: number, timezone: string): TzParts {
   return { year, month, day, hour, minute, second }
 }
 
-/** 指定时区下"当天 00:00:00"的 epoch 毫秒（真实时区零点，非 UTC 零点）。 */
+/** Epoch ms of "today 00:00:00" in the given timezone (real zone midnight, not UTC midnight). */
 export function startOfDayEpoch(ts: number, timezone: string): number {
   const p = tzPartsOf(ts, timezone)
   const elapsedMs = p.hour * 3_600_000 + p.minute * 60_000 + p.second * 1000
   return Math.floor(ts / 1000) * 1000 - elapsedMs
 }
 
-/** 指定时区下该时刻的"当天分钟数"（0..1439.99）。 */
+/** Minutes-of-day of a timestamp in the given timezone (0..1439.99). */
 export function dayMinuteOf(ts: number, timezone: string): number {
   const p = tzPartsOf(ts, timezone)
   return p.hour * 60 + p.minute + p.second / 60
 }
 
-/** 指定时区下该时刻的 ISO 星期（1=周一 … 7=周日）。 */
+/** ISO weekday of a timestamp in the given timezone (1=Monday … 7=Sunday). */
 export function tzWeekdayOf(ts: number, timezone: string): number {
   const p = tzPartsOf(ts, timezone)
-  // Date.getUTCDay()：0=周日…6=周六 → ISO 1=周一…7=周日。
+  // Date.getUTCDay(): 0=Sunday…6=Saturday → ISO 1=Monday…7=Sunday.
   const dow = new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay()
   return ((dow + 6) % 7) + 1
 }
 
 /**
- * 判定 now 命中的时段档名（按 schedule 顺序，首个匹配的窗口级）。
- * 回退档契约见 types.ts ScheduleLevel：last-resort，不参与 first-match。
- * schedule 为空或窗口级与回退档均未命中 → undefined。
+ * Level name matching `now` (first matching windowed level, in schedule order).
+ * Fallback contract: see types.ts ScheduleLevel — last-resort, not first-match.
+ * Empty schedule, or no windowed level / fallback match → undefined.
  */
 export function isLevelAt(
   now: number,
@@ -132,11 +132,12 @@ export function isLevelAt(
 }
 
 /**
- * 距下一个时段窗口边界的毫秒数（任一 level 任一 window 的 start/end）。
- * 星期感知：自 now 所在日向前扫描最多 7 天，只收集「该日承载」的边界
- * （同天窗口的 start/end 落在开启日；跨天窗口的 start 落在开启日、end 落在次日），
- * 因此周五 18:00 的下一边界会跳过周末直达周一 09:00。
- * 无任何窗口级时返回 24h。
+ * Milliseconds to the next schedule boundary (any level, any window start/end).
+ * Weekday-aware: scan up to 7 days forward from today, collecting only the
+ * boundaries carried by each day (same-day windows carry start/end on their open
+ * day; cross-midnight windows carry start on the open day and end on the next),
+ * so the next boundary after Friday 18:00 skips the weekend to Monday 09:00.
+ * No windowed level → 24h.
  */
 export function nextBoundaryMs(
   now: number,
@@ -162,13 +163,14 @@ export function nextBoundaryMs(
   return Number.isFinite(best) ? best : 86_400_000
 }
 
-/** 边界分钟 m 是否由 weekday 当日承载（见 nextBoundaryMs 注释）。 */
+/** Whether boundary minute m is carried by that weekday's day (see nextBoundaryMs). */
 function boundaryCarriedByDay(m: number, weekday: number, w: TimeWindow): boolean {
   if (w.start <= w.end) {
-    // 同天窗口：开启日当天承载 start 与 end 两个边界。
+    // Same-day window: the open day carries both start and end boundaries.
     return isEveryDayWindow(w) || w.days.includes(weekday)
   }
-  // 跨天窗口：start 由开启日承载；end 落在次日，由「开启日的次日」承载。
+  // Cross-midnight window: start is carried by the open day; end falls on the
+  // next day, carried by the day after the open day.
   const anyDay = isEveryDayWindow(w)
   if (m === w.start) return anyDay || w.days.includes(weekday)
   return anyDay || w.days.includes(prevWeekday(weekday))

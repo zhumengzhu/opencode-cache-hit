@@ -23,7 +23,7 @@ export function AgentsView(props: {
 
   const subsSaved = () => m.subsSaved()
 
-  // 子 agent 动态成本汇总：存在任一动态价时展示重算值（≈ 前缀）。
+  // Sub-agent dynamic cost total: show the recomputed value (≈ prefix) when any child is dynamic.
   const shownSubCost = createMemo(() => {
     const map = m.subAgentDynamicCosts()
     let dynamic = false

@@ -34,7 +34,7 @@ export function MainSessionView(props: {
     return formatStreamingNowDisplay(now.phase, now.speed, m.t().streamingIdle, m.useTps())
   })
 
-  /** 动态规则生效时展示重算成本（≈ 前缀），否则回退 OpenCode 的 msg.cost。 */
+  /** Show the recomputed cost (≈ prefix) when dynamic rules apply, else OpenCode's msg.cost. */
   const shownCost = createMemo(() => {
     const rec = m.recomputedCost()
     if (rec && rec.dynamic) return { value: rec.cost, approx: true }

@@ -1,8 +1,8 @@
 import type { ModelCost } from "../types.ts"
 
 /**
- * 上下文分档：contextTokens 超过 threshold 时返回分档价格，否则基础档。
- * threshold 优先用模型自身档位阈值（`cost.contextThreshold`，来自运行时 tier.size）。
+ * Context tier: contextTokens above threshold returns the tiered price, else base.
+ * threshold prefers the model's own tier size (`cost.contextThreshold`, from runtime tier.size).
  */
 export function selectContextRates(
   cost: ModelCost,
@@ -23,9 +23,10 @@ type RuntimeTier = {
 }
 
 /**
- * 运行时 cost（`api.state.provider`）→ 插件 ModelCost。
- * opencode 运行时把配置层的 context_over_200k 转为 `tiers[]` / `experimentalOver200K`，
- * 这里归一化回插件字段（含档位阈值 tier.size）。配置层字段已存在时幂等返回。
+ * Runtime cost (`api.state.provider`) → plugin ModelCost.
+ * opencode converts config-level context_over_200k into `tiers[]` / `experimentalOver200K`
+ * at runtime; here we normalize back to plugin fields (including the tier size).
+ * Idempotent when the config-level fields already exist.
  */
 export function normalizeRuntimeCost(cost: ModelCost): ModelCost {
   if (cost.context_over_200k) return cost
@@ -51,7 +52,7 @@ export function normalizeRuntimeCost(cost: ModelCost): ModelCost {
   return cost
 }
 
-/** 各率乘系数（倍率模式）。系数为 1 时原样返回。 */
+/** Scale all rates by a factor (multiplier mode). Factor 1 returns rates unchanged. */
 export function scaleRates(cost: ModelCost, factor: number): ModelCost {
   if (factor === 1) return cost
   return {
@@ -72,8 +73,8 @@ export function scaleRates(cost: ModelCost, factor: number): ModelCost {
 }
 
 /**
- * 用量 → 成本（USD）。`input` 为未命中输入 token（不含缓存，与 opencode 语义一致），
- * 缓存命中部分按 `cacheRead` 单独以 cacheReadRate 计费。
+ * Usage → cost (USD). `input` is cache-miss input tokens (excludes cache, matching
+ * opencode semantics); cache hits are billed separately via cacheReadRate × `cacheRead`.
  */
 export function billingCost(
   rates: ModelCost,
