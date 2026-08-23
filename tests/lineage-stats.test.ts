@@ -1,14 +1,17 @@
 import { describe, expect, test } from "bun:test"
-import { aggregateLineages, lineageKey, UNKNOWN_LINEAGE_KEY } from "../src/lineage-stats.ts"
+import { aggregateLineages } from "../src/lineage-stats.ts"
+import { messageLineageKey, UNKNOWN_LINEAGE_KEY } from "../src/stats.ts"
 
-describe("lineageKey", () => {
+describe("messageLineageKey", () => {
   test("uses provider and model ids", () => {
-    expect(lineageKey("openai", "gpt-5.6-sol")).toBe("openai:gpt-5.6-sol")
+    expect(messageLineageKey({ role: "assistant", providerID: "openai", modelID: "gpt-5.6-sol" })).toBe(
+      "openai:gpt-5.6-sol",
+    )
   })
 
   test("keeps missing metadata in the unknown bucket", () => {
-    expect(lineageKey("openai", undefined)).toBe(UNKNOWN_LINEAGE_KEY)
-    expect(lineageKey(undefined, "gpt-5.6-sol")).toBe(UNKNOWN_LINEAGE_KEY)
+    expect(messageLineageKey({ role: "assistant", providerID: "openai" })).toBe(UNKNOWN_LINEAGE_KEY)
+    expect(messageLineageKey({ role: "assistant", modelID: "gpt-5.6-sol" })).toBe(UNKNOWN_LINEAGE_KEY)
   })
 })
 

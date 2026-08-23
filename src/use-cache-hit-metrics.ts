@@ -23,7 +23,7 @@ import {
 } from "./stats.ts"
 import { activeLineageKey, aggregateLineages, recentLineages } from "./lineage-stats.ts"
 import { computePricing, computeSessionPricing, computeSubsSaved, type PricingInfo } from "./pricing.ts"
-import { recomputeSessionCost, recomputeSubAgentCost } from "./dynamic-pricing/recompute.ts"
+import { recomputeSubAgentCost } from "./dynamic-pricing/recompute.ts"
 import { nextBoundaryMs } from "./dynamic-pricing/schedule.ts"
 import {
   computeAvgTokenTpotMs,
@@ -126,11 +126,6 @@ export function useCacheHitMetrics(props: {
       now: now(),
       rules: props.dynamicPricing,
     }),
-  )
-
-  // Dynamic cost recompute (per-message request time + context tier); unpriced → null.
-  const recomputedCost = createMemo(() =>
-    recomputeSessionCost(metricInput(), props.providers(), props.dynamicPricing),
   )
 
   // Sub-agent dynamic cost (session creation time + aggregate tokens); no created / unpriced → null.
@@ -282,7 +277,6 @@ export function useCacheHitMetrics(props: {
     pctLabel: createMemo(() => formatPercentOneDecimal(perCall().hitPercent)),
     modelShort: createMemo(() => shortModelName(main().model)),
     totalSubCost: createMemo(() => subs().reduce((s, a) => s + a.cost, 0)),
-    recomputedCost,
     subAgentDynamicCosts,
     subsSaved,
     collapsedHitSummary,

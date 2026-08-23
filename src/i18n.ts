@@ -4,6 +4,7 @@ export type UiStrings = {
   title: string
   hit: string
   totalHit: string
+  historyIncomplete: string
   read: string
   write: string
   miss: string
@@ -53,6 +54,7 @@ const EN: UiStrings = {
   title: "Cache Hit",
   hit: "Hit",
   totalHit: "Total Hit:",
+  historyIncomplete: "* history truncated",
   read: "Read:",
   write: "Write:",
   miss: "Miss:",
@@ -97,6 +99,7 @@ const ZH: UiStrings = {
   title: "缓存命中",
   hit: "命中率",
   totalHit: "总命中:",
+  historyIncomplete: "* 历史记录可能已截断",
   read: "缓存读:",
   write: "缓存写:",
   miss: "未命中:",

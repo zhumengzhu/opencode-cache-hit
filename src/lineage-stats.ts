@@ -7,12 +7,6 @@ import {
 } from "./stats.ts"
 import type { AssistantMessage, LineageBucket } from "./types.ts"
 
-export const UNKNOWN_LINEAGE_KEY = "unknown"
-
-export function lineageKey(providerID?: string, modelID?: string): string {
-  return providerID && modelID ? `${providerID}:${modelID}` : UNKNOWN_LINEAGE_KEY
-}
-
 function emptyBucket(key: string, providerID: string, modelID: string): LineageBucket {
   return {
     key,
@@ -72,7 +66,7 @@ export function activeLineageKey(messages: readonly AssistantMessage[]): string 
     .slice()
     .sort(compareAssistantMessages)
   const last = eligible[eligible.length - 1]
-  return last ? lineageKey(last.providerID, last.modelID) : undefined
+  return last ? messageLineageKey(last) : undefined
 }
 
 export function recentLineages(buckets: readonly LineageBucket[]): LineageBucket[] {

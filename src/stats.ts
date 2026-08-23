@@ -142,13 +142,15 @@ export type PerCallHitTrend = {
   state: "steady" | "switch" | "warming"
 }
 
+export const UNKNOWN_LINEAGE_KEY = "unknown"
+
 /** Assistant turns that represent an interactive, billable model call. */
 export function isInteractiveAssistantMessage(msg: AssistantMessage): boolean {
   return msg.summary !== true && msg.agent !== "compaction"
 }
 
 export function messageLineageKey(msg: AssistantMessage): string {
-  return msg.providerID && msg.modelID ? `${msg.providerID}:${msg.modelID}` : "unknown"
+  return msg.providerID && msg.modelID ? `${msg.providerID}:${msg.modelID}` : UNKNOWN_LINEAGE_KEY
 }
 
 export function compareAssistantMessages(a: AssistantMessage, b: AssistantMessage): number {
@@ -188,10 +190,13 @@ export function computePerCallHitTrend(messages: readonly AssistantMessage[]): P
     }))
     .filter((call) => call.hit !== null)
   const last = calls[calls.length - 1]
+  if (!last) {
+    return { hitPercent: 0, trendPercent: 0, hasTrend: false, state: "warming" }
+  }
   const previous = calls[calls.length - 2]
-  const hit = last?.hit ?? 0
-  const switched = Boolean(last && previous && messageLineageKey(last.msg) !== messageLineageKey(previous.msg))
-  const state = !last ? "warming" : switched || !previous ? (switched ? "switch" : "warming") : "steady"
+  const hit = last.hit ?? 0
+  const switched = Boolean(previous && messageLineageKey(last.msg) !== messageLineageKey(previous.msg))
+  const state = !previous ? "warming" : switched ? "switch" : "steady"
   return {
     hitPercent: hit,
     trendPercent: previous && !switched ? hit - (previous.hit ?? 0) : 0,

@@ -71,6 +71,9 @@ export function MainSessionView(props: {
           m.trendLabel() ? { text: m.trendLabel(), color: m.trendFg() } : undefined
         }
       />
+      <Show when={m.metricMessageStatus() !== "complete"}>
+        <text fg={m.pal().muted}>{m.t().historyIncomplete}</text>
+      </Show>
       <TuiMetricRow pal={m.pal()} layout={layout} label={m.t().totalHit} value={m.sessionPct()} />
       <Show when={props.cacheTTL?.enabled && props.cacheTTL?.providers}>
         <CacheTTLView

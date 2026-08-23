@@ -52,10 +52,10 @@ export type LlmCallRecord = {
   reasoning: number
   cacheRead: number
   cacheWrite: number
-   cost: number
-   hitPercent: number | null
-   skippedForHit: boolean   // compaction / summary
-   skippedForMetrics: boolean // compaction / summary; raw row remains available
+  cost: number
+  hitPercent: number | null
+  skippedForHit: boolean   // compaction / summary
+  skippedForMetrics: boolean // compaction / summary; raw row remains available
   ttftMs?: number          // Time To First Token (firstPartTime - created)
   ttftSource?: "sdk" | "tui"  // TTFT data source
   tps?: number             // Tokens Per Second ((output + reasoning) / genTime * 1000)
@@ -146,7 +146,7 @@ Event-driven path in `sidebar-host.tsx` → `timeline/collector.ts`:
 Record rules (`assistantMessageToRecord`):
 
 - Only `role === assistant`.
-- `skippedForHit = msg.summary === true`.
+- `skippedForHit = !isInteractiveAssistantMessage(msg)`.
 - `skippedForMetrics = msg.summary === true || msg.agent === "compaction"`.
 - `hitPercent` uses the same per-message logic as `computePerCallHitTrend`.
 - Child sessions: same pipeline when `handleMessage` is called for a child `sessionID` in `childIds` (no batch merge in v1).

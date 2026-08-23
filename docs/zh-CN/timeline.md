@@ -60,10 +60,10 @@ export type LlmCallRecord = {
   cost: number
   /** 单轮 cache 命中率 0–100；无分母时为 null */
   hitPercent: number | null
-   /** compaction / summary 消息 */
-   skippedForHit: boolean
-   /** compaction / summary 消息；原始行仍可保留 */
-   skippedForMetrics: boolean
+  /** compaction / summary 消息 */
+  skippedForHit: boolean
+  /** compaction / summary 消息；原始行仍可保留 */
+  skippedForMetrics: boolean
   ttftMs?: number          // 首 Token 延迟（firstPartTime - created）
   ttftSource?: "sdk" | "tui"  // TTFT 数据来源
   tps?: number             // 每秒 Token 数（(output + reasoning) / genTime * 1000）
@@ -154,7 +154,7 @@ export type LlmCallRecord = {
 记录规则（`assistantMessageToRecord`）：
 
 - 只处理 `role === assistant`。
-- `skippedForHit = msg.summary === true`。
+- `skippedForHit = !isInteractiveAssistantMessage(msg)`。
 - `skippedForMetrics = msg.summary === true || msg.agent === "compaction"`。
 - `hitPercent` 与 `computePerCallHitTrend` 单条算法一致。
 - 子 session：对 `childIds` 中的 `sessionID` 同样走 `handleMessage`（v1 不做批量合并排序）。
