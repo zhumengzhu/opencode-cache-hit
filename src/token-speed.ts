@@ -1,5 +1,6 @@
 import { generationDurationMs, timingFromAssistantMessage } from "./message-timing.ts"
 import type { AssistantMessage } from "./types.ts"
+import { isInteractiveAssistantMessage } from "./stats.ts"
 
 export function computeTokenSpeed(output: number, reasoning: number, durationMs: number): number {
   if (durationMs < 500) return 0
@@ -24,7 +25,7 @@ export function computeAvgTokenSpeed(
   let totalTokens = 0
   let totalMs = 0
   for (const msg of messages) {
-    if (msg.summary) continue
+    if (!isInteractiveAssistantMessage(msg)) continue
     const timing = timingFromAssistantMessage(msg)
     if (!timing?.isComplete) continue
     const output = msg.tokens?.output ?? 0
@@ -47,7 +48,7 @@ export function computeAvgTokenTpotMs(
   let totalGenerationMs = 0
   let totalTokenIntervals = 0
   for (const msg of messages) {
-    if (msg.summary) continue
+    if (!isInteractiveAssistantMessage(msg)) continue
     const timing = timingFromAssistantMessage(msg)
     if (!timing?.isComplete) continue
     const output = msg.tokens?.output ?? 0

@@ -5,6 +5,8 @@
  */
 import type { CacheTTLConfig } from "./plugin-config.ts"
 import { parseDuration } from "./plugin-config.ts"
+import { compareAssistantMessages, isInteractiveAssistantMessage, messageLineageKey } from "./stats.ts"
+import type { AssistantMessage } from "./types.ts"
 
 const SECOND = 1000
 const MINUTE = 60 * SECOND
@@ -22,6 +24,26 @@ export const BUILT_IN_TTL: Record<string, number> = {
   xiaomi: 5 * MINUTE,
   qwen: 5 * MINUTE,
   moonshot: 5 * MINUTE,
+}
+
+export function findLastCacheActivityByLineage(
+  messages: readonly AssistantMessage[],
+): Map<string, AssistantMessage> {
+  const result = new Map<string, AssistantMessage>()
+  for (const message of messages) {
+    if (
+      message.role !== "assistant" ||
+      !isInteractiveAssistantMessage(message) ||
+      message.time?.completed === undefined ||
+      ((message.tokens?.cache?.read ?? 0) === 0 && (message.tokens?.cache?.write ?? 0) === 0)
+    ) {
+      continue
+    }
+    const key = messageLineageKey(message)
+    const previous = result.get(key)
+    if (!previous || compareAssistantMessages(previous, message) < 0) result.set(key, message)
+  }
+  return result
 }
 
 // Tolerates undefined/partial config (guards against pre-normalize input; see #3).

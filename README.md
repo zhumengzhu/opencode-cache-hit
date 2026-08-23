@@ -31,12 +31,15 @@ The **tool-part TTFT fallback** (capturing `tool.pending` as first-response time
 
 ## Features
 
-- **Cache hit rate**: session total + **per-turn** rate with trend (↑ / ↓ / `-`) on the main block
+- **Cache hit rate**: active provider/model lineage total + **per-turn** rate with trend (↑ / ↓ / `-`) on the main block
 - **Token breakdown**: cache read / write / miss / output (aligned rows with visual-cache)
-- **Cost**: session cost with multi-currency config (`USD`, `CNY`, `EUR`, `GBP`, `JPY`); per-million rates and cache savings from provider config; **dynamic pricing** for time-of-day tiers (DeepSeek peak/off-peak) and context tiers (`context_over_200k`, e.g. GPT-5.6)
+- **Cost**: per-message model rates with multi-currency config (`USD`, `CNY`, `EUR`, `GBP`, `JPY`); read savings, write premium, and net cache value; **dynamic pricing** for time-of-day tiers (DeepSeek peak/off-peak) and context tiers (`context_over_200k`, e.g. GPT-5.6)
 - **Sub-agents**: **Agents** section rolls up **child sessions only** (scope labeled in UI); each row shows model name + session ID suffix with **vendor-tinted** label (cost in muted gray)
 - **Main + Agents**: main block always shown; **Agents** section when sub-agents exist (foldable)
-- **Collapsible sections**: Detail / Model (and Agents); theme-adaptive hit bar colors
+- **Model lineages**: separate provider/model buckets; model switches show `switch` or `warming` instead of a cross-model trend
+- **Cache TTL**: active and recent model lineages have independent timers
+- **Compaction filtering**: `summary: true` and `agent: "compaction"` messages do not change interactive metrics
+- **Collapsible sections**: Detail / Model / Models (and Agents); theme-adaptive hit bar colors
 - **i18n**: `display.lang` — `en` / `zh` / `auto` via config (no slash commands yet)
 - **Timeline** (optional): daily JSONL per assistant turn for `jq` / scripts
 
@@ -76,7 +79,7 @@ Create or edit `~/.config/opencode/tui.json` / `tui.jsonc`:
 }
 ```
 
-Local development: use `"./plugins/opencode-cache-hit"` instead of the npm name.
+Local development: use an absolute path to the checkout, such as `"/path/to/opencode-cache-hit"`, instead of the npm name. OpenCode loads the package root and its `index.tsx` entry.
 
 Copy `cache-hit.config.example.json` → `~/.config/opencode/cache-hit.json` (recommended) or next to the plugin root. **Restart OpenCode** after changing plugin code or config.
 
@@ -132,9 +135,17 @@ Supported display currencies in config: `USD`, `CNY`, `EUR`, `GBP`, `JPY` (see `
 
 **Agents** totals sum **child sessions only**, not the main session (see `agentsScopeHint`). Main session metrics stay in the block above; collapse **Agents** to save space. Per-child rows use the same model slug as the main **Model** line (truncated when the sidebar is narrow); see [docs/en/design.md](docs/en/design.md) § Sub-agent row display.
 
+### Model lineages and metric history
+
+The main Hit, Total Hit, and cache TTL values use the active provider/model lineage. Cost, read savings, write premium, and net cache value sum eligible messages with each message's provider/model rates. The foldable **Models** section shows recent lineages separately.
+
+The plugin excludes assistant messages with `summary: true` or `agent: "compaction"` from interactive metrics. Timeline JSONL keeps these rows when `timeline.logSummaryMessages` is enabled and marks them with `skippedForMetrics: true`.
+
+The plugin requests main-session history directly with a limit of 10,000 messages. It reports a capped or unavailable source internally and falls back to the live TUI mirror when needed. The live mirror can contain only the 100 most recent messages. Streaming speed and TTFT use this live mirror so they can update during a call. If a message has no matching rate, the cost row keeps OpenCode's reported blended cost instead of showing a partial recomputation.
+
 ### Timeline logs (`timeline`, default off)
 
-Per assistant turn → JSONL (tokens, cache, cost, TTFT, per-tool `toolDurations`). [docs/en/timeline.md](docs/en/timeline.md) · [中文](docs/zh-CN/timeline.md).
+Per assistant turn → JSONL (tokens, cache, cost, TTFT, per-tool `toolDurations`, and `skippedForMetrics`). [docs/en/timeline.md](docs/en/timeline.md) · [中文](docs/zh-CN/timeline.md).
 
 ```json
 "timeline": {
@@ -168,7 +179,7 @@ Retention details: [Rotation and retention](docs/en/timeline.md#rotation-and-ret
 
 ### Cache TTL (`cacheTTL`, default on)
 
-Shows how long the prompt cache has been alive. Color changes when exceeding TTL:
+Shows how long the active provider/model prompt cache has been alive. Each model lineage has an independent timer. Color changes when exceeding TTL:
 
 - Green: elapsed < TTL
 - Yellow: TTL ≤ elapsed < 2×TTL
@@ -254,7 +265,7 @@ Per-model rules support two forms (explicit config wins over the built-in DeepSe
 - `levels`: absolute rates per level, e.g. `{"peak": {"input": 0.44, "output": 0.88, "cacheRead": 0.01}, "offpeak": {"input": 0.22, ...}}`. Cache rates may be written as flat `cacheRead`/`cacheWrite` (or `cache_read`/`cache_write`) or nested `cache: {"read": …, "write": …}` (both are accepted; flat wins if both present). Default unit is **USD per 1M** (same as `state.provider`). To write prices in another currency, set `"currency": "CNY"` and either make it match the display `cost.currency` (converted via `cost.rate`) or provide the per-rule `"rate"` (USD → that currency, e.g. `"rate": 1.08` for EUR). If the currency cannot be converted (no `rate`, currency ≠ display currency), a warning is logged to stderr and the values are treated as USD. `multipliers` are ratios and have no currency.
 - `contextThreshold`: per-model override of the global threshold (wins over the runtime tier size from `state.provider`).
 
-Rates shown in the sidebar switch automatically at schedule boundaries (no polling). The `peak`/`off-peak` badge on the rate row appears **only when the model actually prices that level** (the level exists in its explicit `levels`/`multipliers`, or the built-in DeepSeek default applies); plain static models and unpriced levels (e.g. a peak-only rule at an off-peak moment) show no badge. Session cost shown is recomputed per message from its request time + context tier when dynamic rules apply (marked `≈`); otherwise OpenCode's own `msg.cost` is used. Sub-agent rows use their **session creation time** (`session.list`) for time-of-day pricing (marked `≈` on the Agents total when any child was recomputed).
+Rates shown in the sidebar switch automatically at schedule boundaries (no polling). The `peak`/`off-peak` badge on the rate row appears **only when the model actually prices that level** (the level exists in its explicit `levels`/`multipliers`, or the built-in DeepSeek default applies); plain static models and unpriced levels (e.g. a peak-only rule at an off-peak moment) show no badge. Session cost shown is recomputed per message from its provider/model, request time, and context tier when dynamic rules apply (marked `≈`); otherwise OpenCode's own `msg.cost` is used. If a message has no matching rate, the cost row keeps OpenCode's reported blended cost instead of showing a partial recomputation. Read savings, write premium, and net cache value use the same per-message rates. Sub-agent rows use their **session creation time** (`session.list`) for time-of-day pricing (marked `≈` on the Agents total when any child was recomputed).
 
 > [!NOTE]
 > **Migration (weekday-aware schedules).** Schedules now support an optional `days` field (ISO weekday, 1=Monday … 7=Sunday; omitted = every day) and a catch-all **fallback level** (a level with empty `windows`). DeepSeek's official peak is **Monday–Friday** 09:00-12:00 / 14:00-18:00 Beijing time; weekends are off-peak. The built-in default schedule is weekday-aware, and new configs written from the examples above are too. **Legacy configs without `days` keep the old behavior — weekends are still billed as peak.** To pick up the fix, add `"days": [1,2,3,4,5]` to your `peak` windows (or use the new default schedule with an `offpeak` fallback). If you resolve a DeepSeek model while your configured schedule has windowed levels but no `days`, the plugin logs a one-time hint to stderr.

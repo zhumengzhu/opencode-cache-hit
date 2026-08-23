@@ -7,37 +7,35 @@
 import { createMemo, createSignal, onCleanup, Show, type Accessor } from "solid-js"
 import type { AssistantMessage } from "./types.ts"
 import { type CacheTTLConfig, DEFAULT_CACHE_TTL } from "./plugin-config.ts"
-import { getTTL, formatElapsed, DEFAULT_TTL_MS } from "./cache-ttl.ts"
+import { findLastCacheActivityByLineage, getTTL, formatElapsed, DEFAULT_TTL_MS } from "./cache-ttl.ts"
 import type { PanelPalette, PanelLayout } from "./tui-panel/index.ts"
-
-function findLastCacheActivity(messages: Accessor<AssistantMessage[]> | undefined): AssistantMessage | null {
-  const msgs = messages?.()
-  if (!msgs) return null
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i]
-    if (
-      m.role === "assistant" &&
-      m.time?.completed !== undefined &&
-      ((m.tokens?.cache?.read ?? 0) > 0 || (m.tokens?.cache?.write ?? 0) > 0)
-    ) {
-      return m
-    }
-  }
-  return null
-}
 
 export function CacheTTLView(props: {
   messages?: Accessor<AssistantMessage[]>
+  lineageKey?: Accessor<string | undefined>
+  now?: Accessor<number>
   config?: CacheTTLConfig
   pal: PanelPalette
   layout: PanelLayout
   label: string
 }) {
-  const [now, setNow] = createSignal(Date.now())
-  const tick = setInterval(() => setNow(Date.now()), 1000)
-  onCleanup(() => clearInterval(tick))
+  const [localNow, setLocalNow] = createSignal(Date.now())
+  const tick = props.now ? undefined : setInterval(() => setLocalNow(Date.now()), 1000)
+  onCleanup(() => {
+    if (tick !== undefined) clearInterval(tick)
+  })
 
-  const lastCache = createMemo(() => findLastCacheActivity(props.messages))
+  const now = () => props.now?.() ?? localNow()
+  const activities = createMemo(() => findLastCacheActivityByLineage(props.messages?.() ?? []))
+  const lastCache = createMemo(() => {
+    const key = props.lineageKey?.()
+    if (key) return activities().get(key) ?? null
+    let latest: AssistantMessage | null = null
+    for (const message of activities().values()) {
+      if (!latest || (message.time?.completed ?? 0) > (latest.time?.completed ?? 0)) latest = message
+    }
+    return latest
+  })
 
   // Self-heal against partial/undefined config reaching this component (see #1, #3):
   // a stale-cached plugin build may pass { enabled: true } without `providers`.

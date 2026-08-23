@@ -1,5 +1,5 @@
 import { generationDurationMs, timingFromAssistantMessage } from "../message-timing.ts"
-import { perMessageHitPercent } from "../stats.ts"
+import { isInteractiveAssistantMessage, perMessageHitPercent } from "../stats.ts"
 import type { AssistantMessage } from "../types.ts"
 import type { LlmCallRecord } from "./types.ts"
 import type { ToolDurationRecord } from "../tool-timing.ts"
@@ -43,7 +43,7 @@ export function assistantMessageToRecord(
   const timing = timingFromAssistantMessage(msg)
   if (!timing) return null
   const t = msg.tokens ?? {}
-  const skippedForHit = msg.summary === true
+  const skippedForMetrics = !isInteractiveAssistantMessage(msg)
   const output = t.output ?? 0
   const reasoning = t.reasoning ?? 0
   const tokens = output + reasoning
@@ -77,7 +77,8 @@ export function assistantMessageToRecord(
     cacheWrite: t.cache?.write ?? 0,
     cost: msg.cost ?? 0,
     hitPercent: perMessageHitPercent(msg),
-    skippedForHit,
+    skippedForHit: skippedForMetrics,
+    skippedForMetrics,
     ttftMs,
     ttftSource,
     tps,
@@ -89,4 +90,3 @@ export function assistantMessageToRecord(
     toolDurations,
   }
 }
-

@@ -106,6 +106,14 @@ describe("recomputeSessionCost", () => {
       recomputeSessionCost([msg({ id: "x", providerID: "nope", modelID: "nope", tokens: { input: 100 } })], PROVIDERS, RULES),
     ).toBeNull()
   })
+
+  test("excludes compaction messages", () => {
+    const result = recomputeSessionCost([
+      msg({ id: "compact", agent: "compaction", providerID: "deepseek", modelID: "deepseek/deepseek-v4-flash", tokens: { input: 100, output: 10 } }),
+      msg({ id: "normal", providerID: "deepseek", modelID: "deepseek/deepseek-v4-flash", tokens: { input: 100, output: 10 } }),
+    ], PROVIDERS, RULES)
+    expect(result?.counted).toBe(1)
+  })
 })
 
 describe("recomputeSubAgentCost", () => {

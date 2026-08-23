@@ -11,11 +11,11 @@ For developers. Sidebar aggregation: [design.md](./design.md). User guide: [READ
 | Inspect each assistant call’s tokens / cache / cost / hit % over time | Replace OpenCode platform logs (`~/.local/share/opencode/log`) |
 | Distinguish main vs child sessions | Spam the TUI with `console.log` |
 | Local JSONL for `jq` / scripts | Cloud upload or team sharing |
-| Same rules as `stats.ts` (including `summary` skip) | SQLite, charts, or recursive sub-agents in v1 |
+| Same rules as `stats.ts` (including summary and compaction skips) | SQLite, charts, or recursive sub-agents in v1 |
 
 ## Core concept
 
-**One timeline event = one billable assistant turn**, same source as the sidebar **Hit** row—not tool parts or user messages.
+**One timeline event = one assistant turn**, with `skippedForMetrics` marking summary or compaction rows. Interactive rows use the same source as the sidebar **Hit** row. The timeline does not record tool parts or user messages.
 
 ```mermaid
 flowchart LR
@@ -28,8 +28,8 @@ flowchart LR
 | Field | Source |
 |-------|--------|
 | Sort key | `time.completed ?? time.created` (`timingFromAssistantMessage`) |
-| Hit trend eligibility | `summary !== true` and `input + cache.read > 0` |
-| Session totals | `aggregateSessionFromMessages` (may later skip `summary` too) |
+| Hit trend eligibility | `summary !== true`, `agent !== "compaction"`, and `input + cache.read > 0` |
+| Session totals | `aggregateSessionFromMessages` with the interactive-message predicate |
 
 ## Data model
 
@@ -52,9 +52,10 @@ export type LlmCallRecord = {
   reasoning: number
   cacheRead: number
   cacheWrite: number
-  cost: number
-  hitPercent: number | null
-  skippedForHit: boolean   // compaction / summary
+   cost: number
+   hitPercent: number | null
+   skippedForHit: boolean   // compaction / summary
+   skippedForMetrics: boolean // compaction / summary; raw row remains available
   ttftMs?: number          // Time To First Token (firstPartTime - created)
   ttftSource?: "sdk" | "tui"  // TTFT data source
   tps?: number             // Tokens Per Second ((output + reasoning) / genTime * 1000)
@@ -146,8 +147,11 @@ Record rules (`assistantMessageToRecord`):
 
 - Only `role === assistant`.
 - `skippedForHit = msg.summary === true`.
+- `skippedForMetrics = msg.summary === true || msg.agent === "compaction"`.
 - `hitPercent` uses the same per-message logic as `computePerCallHitTrend`.
 - Child sessions: same pipeline when `handleMessage` is called for a child `sessionID` in `childIds` (no batch merge in v1).
+
+Timeline collection remains separate from sidebar filtering. With `logSummaryMessages: true`, summary and compaction rows stay in JSONL for diagnostics and carry `skippedForMetrics: true`. They do not change hit, token, speed, cost, savings, or TTL metrics.
 
 ## Storage
 
@@ -357,5 +361,5 @@ Default log dir matches `timeline.dir` in plugin config (`~/.local/share/opencod
 ## Example line
 
 ```json
-{"schema":1,"recordedAt":"2024-05-30T08:00:00.000+08:00","sessionId":"sess_main","rootSessionId":"sess_main","scope":"main","messageKey":"sess_main:m1","modelId":"deepseek/v4","created":"2024-05-30T07:59:50.000+08:00","completedAt":"2024-05-30T08:00:00.000+08:00","durationMs":10000,"isComplete":true,"input":1200,"output":80,"reasoning":0,"cacheRead":38000,"cacheWrite":0,"cost":0.012,"hitPercent":96.9,"skippedForHit":false,"ttftMs":944,"ttftSource":"sdk","tps":8.83,"tpot":114.63,"itlP50":12,"itlP90":15,"itlCount":5,"finish":"stop"}
+{"schema":1,"recordedAt":"2024-05-30T08:00:00.000+08:00","sessionId":"sess_main","rootSessionId":"sess_main","scope":"main","messageKey":"sess_main:m1","modelId":"deepseek/v4","created":"2024-05-30T07:59:50.000+08:00","completedAt":"2024-05-30T08:00:00.000+08:00","durationMs":10000,"isComplete":true,"input":1200,"output":80,"reasoning":0,"cacheRead":38000,"cacheWrite":0,"cost":0.012,"hitPercent":96.9,"skippedForHit":false,"skippedForMetrics":false,"ttftMs":944,"ttftSource":"sdk","tps":8.83,"tpot":114.63,"itlP50":12,"itlP90":15,"itlCount":5,"finish":"stop"}
 ```

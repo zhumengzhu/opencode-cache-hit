@@ -20,7 +20,7 @@ See the [documentation index](../README.md).
 flowchart TB
   subgraph ours [opencode-cache-hit]
     DISC[Child session discovery]
-    AGG[Per-message token/cost aggregation]
+    AGG[Filtered per-message and lineage aggregation]
     UI[Cache Hit sidebar]
   end
   subgraph ref [opencode-visual-cache reference]
@@ -45,6 +45,9 @@ flowchart TB
 - OpenCode: `msg.cost` accumulates assistant messages using **USD** list prices from `opencode.json`.
 - Plugin: `createCostFormatter(loadPluginConfig().cost)`; default `costUnit: USD` → `currency: CNY`, `rate: 6.77`.
 - Config file: `~/.config/opencode/cache-hit.json` (preferred) or `cache-hit.config.json` at plugin root (legacy). Defaults in `plugin-config.ts`.
+- Interactive metrics exclude messages with `summary: true` or `agent: "compaction"`.
+- Main-session lineage metrics group direct-history messages by `providerID:modelID`. Missing metadata uses the `unknown` bucket.
+- Mixed-model cost, read savings, write premium, and net cache value use each message's provider/model rates. A dynamic result is marked `≈`. If any message has no matching rate, the cost row keeps OpenCode's reported blended cost.
 
 ## Dynamic pricing (`dynamicPricing`)
 
@@ -73,8 +76,9 @@ sequenceDiagram
   Host->>API: session.list → childIds
   API-->>Host: message.updated { info: Message }
   Host->>Host: refreshTick++, timeline.handleMessage(info)
-  Host->>API: session.get(sid / cid) → aggregates
-  Host->>API: session.messages(sid / cid) → fallback / trend
+  Host->>API: session.messages(sid, limit=10000) → main metric history
+  Host->>API: session.get(cid) / session.messages(cid) → child aggregates
+  Host->>Host: TUI mirror → streaming speed and TTFT
   Host->>W: main, messages, subAgents
   W->>W: aggregate / format / TuiPanel
 ```
@@ -84,12 +88,16 @@ sequenceDiagram
 | File | Role |
 |------|------|
 | `plugin.tsx` | `api.slots.register` (`order: 56`, next to visual-cache); load config |
-| `sidebar-host.tsx` | Bind `sessionId`; `mainSnap` / `mainMessages` / `subAgentList`; `refreshTick` + `message.updated` |
+| `sidebar-host.tsx` | Bind `sessionId`; direct main history; `mainSnap` / `mainMessages` / `subAgentList`; `refreshTick` + `message.updated` |
 | `widget.tsx` | Render panel when `sessionId` set; `noData` when empty |
 | `use-cache-hit-metrics.ts` | Hit row, trend, main block visibility |
 | `main-session-view.tsx` / `agents-view.tsx` | Business sections |
 | `cache-hit-rows.tsx` | Shared token rows in Detail |
 | `stats.ts` | Pure aggregation (no UI) |
+| `session-messages.ts` | Direct main-session history loader and source status |
+| `lineage-stats.ts` | Provider/model lineage buckets and active-lineage selection |
+| `pricing.ts` | Per-message mixed-model cache value calculations |
+| `cache-ttl.ts` / `cache-ttl-view.tsx` | Independent TTL activity per lineage |
 | `session-list.ts` | Parse `session.list`, `childSessionIdsForParent` |
 | `format-cost.ts` / `format-tokens.ts` / `format-cache-ui.ts` | Display formatting (`computeHitBarWidth` lives in `tui-panel/layout.ts`) |
 | `format-model.ts` | Sub-agent row label (`formatSubAgentLabel`) and vendor brand colors (`modelRowColor`) |
@@ -170,23 +178,24 @@ Implementation: `agents-view.tsx` calls `formatSubAgentLabel` + `modelRowColor`;
 
 | Data | Trigger |
 |------|---------|
-| Main snapshot | `createMemo` reads `refreshTick` + `session.get?.(sid)` (aggregate); fallback `messages(sid)` |
-| Main messages (Hit trend) | `createMemo` reads `refreshTick` + `messages(sid)` |
+| Main metric history | Direct `session.messages(sid, limit=10000)`; fallback to the TUI mirror with `capped` or `unavailable` status |
+| Main fast messages | `createMemo` reads `refreshTick` + the TUI mirror for streaming speed and TTFT |
+| Main snapshot fallback | `session.get?.(sid)` aggregate, then the TUI mirror |
 | Sub-agent content | `refreshTick` + `childIds` → `session.get?.(cid)` per child; fallback `messages(cid)` |
 | Sub-agent ids | `session.list` callback / debounced refresh on foreign activity |
 
-`sidebar-host` subscribes to `message.updated` and bumps `refreshTick` so dependent memos recompute; session totals follow `session.get()` aggregates, while per-turn trend follows recent messages.
+`sidebar-host` subscribes to `message.updated` and bumps `refreshTick` so dependent memos recompute. Main lineage totals use direct history. Streaming speed and TTFT use the TUI mirror. Child totals use `session.get()` when available.
 
 ### session.get() availability
 
-`session.get()` provides DB-level aggregates (not capped at 100 messages), but was added in [opencode#26644](https://github.com/anomalyco/opencode/pull/26644) (2026-05-12). Forks that split before this commit — including MiMo-Code — lack the method. The code uses optional-chaining (`get?.()`) and falls back to `session.messages()`, which returns at most the 100 most recent assistant messages per call.
+`session.get()` provides DB-level aggregates (not capped at 100 messages), but was added in [opencode#26644](https://github.com/anomalyco/opencode/pull/26644) (2026-05-12). Forks that split before this commit — including MiMo-Code — lack the method. The main metric path requests direct session messages with a 10,000-message limit. If that request is unavailable or reaches the limit, it falls back to the TUI mirror, which contains at most the 100 most recent assistant messages per call.
 
 ### Accumulation rules
 
-- Every `role === assistant` message in the session is included—not only the last turn.
+- Every eligible `role === assistant` message in the session is included—not only the last turn.
 - Streaming updates the same message’s `tokens` repeatedly.
 - `reasoning` tokens are **excluded** from hit-rate denominator.
-- `summary: true`: skipped in `computePerCallHitTrend`; **not** yet excluded in `aggregateSessionFromMessages`.
+- `summary: true` and `agent: "compaction"`: excluded from interactive totals, speed, pricing, trend, and TTL selection.
 
 ### Sidebar visibility
 
@@ -197,36 +206,39 @@ flowchart TD
   S -->|yes| P[TuiPanel]
   P --> D{hasData?}
   D -->|no| ND[noData]
-  D -->|yes| MAIN[Main / Detail / Model]
+  D -->|yes| MAIN[Main / Detail / Model / Models]
   D -->|has subs| AG[Agents (foldable)]
 ```
 
 | Concept | Implementation |
 |---------|----------------|
 | Whole panel | `widget.tsx`: `Show when={sessionId().length > 0}` |
-| Has data | `mainSessionHasStats(main) \|\| subs.length > 0` |
+| Has data | `lineages.length > 0 \|\| subs.length > 0` |
 | Main **block** | Always rendered |
 | **Agents** | Shown when `subs.length > 0`; foldable |
 
 ## Hit rate (current)
 
-**Session total (Total Hit, aligned with visual-cache)**
+**Active lineage total (Total Hit)**
 
 ```
-Sum input and cache.read over assistant messages
+Sum input and cache.read over eligible assistant messages in the active provider/model lineage
 → cacheRead / (cacheRead + input)
 ```
 
+The foldable **Models** section shows one cache ratio and call count per recent lineage. The previous mixed-session aggregate remains available internally for cost fallback, but it is not labeled as the active model's total.
+
 **Header Hit (per-turn + trend)**
 
-- `computePerCallHitTrend`: one rate per assistant turn; skip `summary: true`.
-- Display the **last** non-summary turn; compare to previous for ↑ / ↓ / `-`.
+- `computePerCallHitTrend`: one rate per eligible assistant turn; skip summary and compaction messages.
+- Display `switch` after a lineage change, `warming` for the first eligible call, then compare only same-lineage calls for ↑ / ↓ / `-`.
 
 **Pricing & Saved**
 
 - Provider pricing is read from `api.state.provider` (SDK runtime data, not hardcoded).
-- `computePricing` looks up per-million rates by `providerID` + `modelID`; computes `saved = (inputRate - cacheReadRate) * cacheRead / 1M`.
-- Main session: **Saved** row in Detail section; per-million rates (`/M in`, `/M cache`, `/M out`) in Model section.
+- `computePricing` looks up active-lineage per-million rates by `providerID` + `modelID`.
+- `computeSessionPricing` sums each message's input, cache-read, cache-write, and output rates. Detail shows read savings, write premium, and net cache value.
+- Main session cost uses the dynamic per-message result when dynamic rules apply and all eligible messages have rates; otherwise it uses the blended OpenCode message cost.
 - Agents section: **Saved** row sums savings across all child sessions (`computeSubsSaved`).
 - All pricing rows hidden when rates are unavailable or saved is zero.
 

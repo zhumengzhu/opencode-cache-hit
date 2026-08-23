@@ -11,6 +11,9 @@ export type UiStrings = {
   reasoning: string
   cost: string
   saved: string
+  readSavings: string
+  writePremium: string
+  netCacheValue: string
   rate: string
   rateIn: string
   rateOut: string
@@ -19,7 +22,9 @@ export type UiStrings = {
   noData: string
   secDetail: string
   secModel: string
+  secLineages: string
   model: string
+  unknown: string
   secAgents: string
   /** Shown in Agents section header: totals are child sessions only, not the parent session. */
   agentsScopeHint: string
@@ -30,6 +35,8 @@ export type UiStrings = {
   avg: string
   now: string
   trend: string
+  switchState: string
+  warmingState: string
   ttft: string
   /** Shown in Speed → Now when no stream is active (not a missing-data dash). */
   streamingIdle: string
@@ -53,6 +60,9 @@ const EN: UiStrings = {
   reasoning: "Reason:",
   cost: "Cost:",
   saved: "Saved:",
+  readSavings: "Read save:",
+  writePremium: "Write cost:",
+  netCacheValue: "Net cache:",
   rate: "Rate:",
   rateIn: "/M in",
   rateOut: "/M out",
@@ -61,7 +71,9 @@ const EN: UiStrings = {
   noData: "Waiting for cache data...",
   secDetail: "Detail",
   secModel: "Model",
+  secLineages: "Models",
   model: "Model:",
+  unknown: "unknown",
   secAgents: "Agents",
   agentsScopeHint: " · sub-sessions",
   secTTL: "TTL:",
@@ -71,6 +83,8 @@ const EN: UiStrings = {
   avg: "Avg:",
   now: "Now:",
   trend: "Trend:",
+  switchState: "switch",
+  warmingState: "warming",
   ttft: "TTFT:",
   streamingIdle: "·",
   approx: "≈",
@@ -90,6 +104,9 @@ const ZH: UiStrings = {
   reasoning: "推理:",
   cost: "费用:",
   saved: "节省:",
+  readSavings: "读取节省:",
+  writePremium: "写入成本:",
+  netCacheValue: "缓存净值:",
   rate: "单价:",
   rateIn: "/M 输入",
   rateOut: "/M 输出",
@@ -98,7 +115,9 @@ const ZH: UiStrings = {
   noData: "等待缓存数据...",
   secDetail: "明细",
   secModel: "模型",
+  secLineages: "模型",
   model: "模型:",
+  unknown: "未知",
   secAgents: "子 Agent",
   agentsScopeHint: " · 仅子会话",
   secTTL: "存活:",
@@ -108,6 +127,8 @@ const ZH: UiStrings = {
   avg: "平均:",
   now: "实时:",
   trend: "趋势:",
+  switchState: "切换",
+  warmingState: "预热",
   ttft: "首Token:",
   streamingIdle: "·",
   approx: "≈",

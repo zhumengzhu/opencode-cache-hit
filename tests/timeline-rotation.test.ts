@@ -30,6 +30,7 @@ const baseRecord = (): LlmCallRecord => ({
   cost: 0,
   hitPercent: null,
   skippedForHit: false,
+  skippedForMetrics: false,
 })
 
 describe("trimFileToMaxLines", () => {

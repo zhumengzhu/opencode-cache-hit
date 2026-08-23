@@ -25,6 +25,8 @@ export type LlmCallRecord = {
   dynCost?: number
   hitPercent: number | null
   skippedForHit: boolean
+  /** True for summary/compaction rows kept for diagnostics but excluded from metrics. */
+  skippedForMetrics: boolean
   ttftMs?: number
   ttftSource?: "sdk" | "tui"
   tps?: number

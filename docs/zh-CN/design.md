@@ -20,7 +20,7 @@
 flowchart TB
   subgraph ours [opencode-cache-hit]
     DISC[子 session 发现]
-    AGG[消息级 token/cost 聚合]
+    AGG[筛选后的消息级与 lineage 聚合]
     UI[Cache Hit 侧边栏]
   end
   subgraph ref [opencode-visual-cache 参考]
@@ -45,6 +45,9 @@ flowchart TB
 - OpenCode：`msg.cost` = 按 `opencode.json` 中**美元**单价对 assistant 消息累加。
 - 插件：`createCostFormatter(loadPluginConfig().cost)`；默认 `costUnit: USD` → `currency: CNY`，`rate: 6.77`。
 - 配置路径：优先 `~/.config/opencode/cache-hit.json`，兜底插件根目录 `cache-hit.config.json`。缺省见 `plugin-config.ts` 的 `DEFAULT_PLUGIN_CONFIG`。
+- 交互指标排除 `summary: true` 或 `agent: "compaction"` 的消息。
+- 主 session lineage 指标按 `providerID:modelID` 对直接历史消息分桶；缺少元数据的消息进入 `unknown` 分桶。
+- 混合模型的费用、读取节省、写入溢价和缓存净值使用每条消息自己的 provider/model 单价。动态重算结果标记 `≈`；如果有消息缺少单价，费用行保留 OpenCode 的混合费用。
 
 ## 动态计价（`dynamicPricing`）
 
@@ -73,8 +76,9 @@ sequenceDiagram
   Host->>API: session.list → childIds
   API-->>Host: message.updated { info: Message }
   Host->>Host: refreshTick++, timeline.handleMessage(info)
-  Host->>API: session.get(sid / cid) → 聚合值
-  Host->>API: session.messages(sid / cid) → fallback / 趋势
+  Host->>API: session.messages(sid, limit=10000) → 主 session 指标历史
+  Host->>API: session.get(cid) / session.messages(cid) → 子 session 聚合
+  Host->>Host: TUI 镜像 → 流式速度与 TTFT
   Host->>W: main, messages, subAgents
   W->>W: aggregate / format / TuiPanel
 ```
@@ -84,12 +88,16 @@ sequenceDiagram
 | 文件 | 职责 |
 |------|------|
 | `plugin.tsx` | `api.slots.register`（`order: 56`，紧邻 visual-cache）；加载配置与 `formatCost` |
-| `sidebar-host.tsx` | 绑定 `sessionId`；`mainSnap` / `mainMessages` / `subAgentList`；`refreshTick` + `message.updated` |
+| `sidebar-host.tsx` | 绑定 `sessionId`；主 session 直接历史；`mainSnap` / `mainMessages` / `subAgentList`；`refreshTick` + `message.updated` |
 | `widget.tsx` | `sessionId` 非空则渲染面板；`hasData` 否则 noData |
 | `use-cache-hit-metrics.ts` | Hit 条、趋势、Combined Hit、hasData |
 | `main-session-view.tsx` / `agents-view.tsx` | 业务区块 |
 | `cache-hit-rows.tsx` | Detail 区共用 token 行 |
 | `stats.ts` | 纯函数聚合（无 UI） |
+| `session-messages.ts` | 主 session 直接历史加载器与数据源状态 |
+| `lineage-stats.ts` | provider/model lineage 分桶与当前 lineage 选择 |
+| `pricing.ts` | 按消息计算混合模型缓存价值 |
+| `cache-ttl.ts` / `cache-ttl-view.tsx` | 按 lineage 独立计算缓存 TTL |
 | `session-list.ts` | `session.list` 响应解析、`childSessionIdsForParent` |
 | `format-cost.ts` / `format-tokens.ts` / `format-cache-ui.ts` | 展示格式化（**不含** `computeHitBarWidth`，其在 `tui-panel/layout.ts`） |
 | `format-model.ts` | 子 agent 行 label（`formatSubAgentLabel`）与厂商品牌色（`modelRowColor`） |
@@ -170,23 +178,24 @@ flowchart TD
 
 | 数据 | 触发方式 |
 |------|----------|
-| 主 session snapshot | `createMemo` 内读 `refreshTick` + `session.get?.(sid)`（聚合）；fallback `messages(sid)` |
-| 主 session 消息列表（Hit 趋势） | `createMemo` 内读 `refreshTick` + `messages(sid)` |
+| 主 session 指标历史 | 直接请求 `session.messages(sid, limit=10000)`；失败或达到上限时回退到 TUI 镜像，并标记 `capped` 或 `unavailable` |
+| 主 session 实时消息 | `createMemo` 读取 `refreshTick` + TUI 镜像，用于流式速度和 TTFT |
+| 主 session snapshot 兜底 | `session.get?.(sid)` 聚合值，再回退到 TUI 镜像 |
 | 子 agent 列表内容 | `refreshTick` + `childIds` → 每个 child 的 `session.get?.(cid)`；fallback `messages(cid)` |
 | 子 agent id 集合 | `session.list` 完成回调 / `message.updated` 发现新 child |
 
-主 session **显式**订阅 `message.updated`（在 `sidebar-host`）：每次事件 `refreshTick++`，触发相关 memo 重算；会话总量以 `session.get()` 聚合为准，逐轮趋势使用最近 messages。
+主 session **显式**订阅 `message.updated`（在 `sidebar-host`）：每次事件 `refreshTick++`，触发相关 memo 重算。主 lineage 总量使用直接历史；流式速度和 TTFT 使用 TUI 镜像；子 session 总量优先使用 `session.get()`。
 
 ### session.get() 可用性
 
-`session.get()` 提供数据库级聚合（不受 100 条消息限制），但在 [opencode#26644](https://github.com/anomalyco/opencode/pull/26644)（2026-05-12）才加入。在此之前 fork 的分支（含 MiMo-Code）缺少该方法。代码使用可选链调用（`get?.()`），fallback 到 `session.messages()`，后者每次调用最多返回最近 100 条 assistant 消息。
+`session.get()` 提供数据库级聚合（不受 100 条消息限制），但在 [opencode#26644](https://github.com/anomalyco/opencode/pull/26644)（2026-05-12）才加入。在此之前 fork 的分支（含 MiMo-Code）缺少该方法。主指标路径直接请求最多 10,000 条 session 消息；请求不可用或达到上限时回退到 TUI 镜像，后者每次最多包含最近 100 条 assistant 消息。
 
 ### 累加规则
 
-- **不是**只在「最后一轮」算一次；session 内**每条** `role === assistant` 的消息都进入累加。
+- **不是**只在「最后一轮」算一次；session 内每条符合条件的 `role === assistant` 消息都进入累加。
 - **流式中**：同一条 message 的 `tokens` 可能多次变化；每次 `message.updated` 后重算。
 - `reasoning` token **不参与**命中率分母。
-- `summary: true` 的 assistant：在 `computePerCallHitTrend` 中**跳过**；会话累计器 `aggregateSessionFromMessages` **暂未**排除。
+- `summary: true` 和 `agent: "compaction"` 的 assistant：从交互总量、速度、费用、趋势和 TTL 选择中排除。
 
 ### 侧边栏可见性（避免与 README 混淆）
 
@@ -197,37 +206,40 @@ flowchart TD
   S -->|是| P[渲染 TuiPanel]
   P --> D{hasData?<br/>主或子有统计}
   D -->|否| ND[noData]
-  D -->|是| MAIN[Main / Detail / Model]
+  D -->|是| MAIN[Main / Detail / Model / Models]
   D -->|有子 agent| AG[Agents 段（可折叠）]
 ```
 
 | 概念 | 实现 |
 |------|------|
 | 整个面板 | `widget.tsx`：`Show when={sessionId().length > 0}` |
-| 有无可显示数据 | `hasData` = `mainSessionHasStats(main) \|\| subs.length > 0` |
+| 有无可显示数据 | `hasData` = `lineages.length > 0 \|\| subs.length > 0` |
 | 主 session **区块** | 始终渲染（Hit / Detail / Model） |
 | **Agents 段** | `subs.length > 0` 时显示，各段可独立折叠 |
 | `sidebarShouldShow` | `mainSessionHasStats(main) \|\| subs.length > 0`（测试用） |
 
 ## 命中率（当前实现）
 
-**会话累计（Total Hit 口径，对齐 visual-cache）**
+**当前 lineage 累计（Total Hit）**
 
 ```
-对所有 assistant 消息累加 input、cache.read
+对当前 provider/model lineage 中符合条件的 assistant 消息累加 input、cache.read
 → cacheRead / (cacheRead + input)
 ```
 
+可折叠的 **Models** 段按最近 lineage 展示独立命中率与调用次数。混合 session 的旧聚合仍可作为费用回退使用，但不会标记为当前模型的 Total Hit。
+
 **顶栏 Hit（单轮 + 趋势）**
 
-- `computePerCallHitTrend(messages)`：每条 assistant 一轮命中率；`summary: true` 跳过。
-- 展示**最后一条**非 summary 轮的命中率；与前一条比较得趋势（↑ / ↓ / `-`）。
+- `computePerCallHitTrend(messages)`：每条符合条件的 assistant 一轮命中率；跳过 summary 与 compaction。
+- lineage 切换后显示 `switch`，新 lineage 的第一条调用显示 `warming`；只有同 lineage 前序调用存在时才显示 ↑ / ↓ / `-`。
 
 **单价与节省（Pricing & Saved）**
 
 - Provider 单价从 `api.state.provider`（SDK 运行时数据）读取，非硬编码。
-- `computePricing` 根据 `providerID` + `modelID` 查找百万 token 单价；计算 `saved = (inputRate - cacheReadRate) * cacheRead / 1M`。
-- 主 session：Detail 段展示 **Saved** 行；Model 段展示百万 token 单价（`/M 输入`、`/M 缓存`、`/M 输出`）。
+- `computePricing` 根据当前 lineage 的 `providerID` + `modelID` 查找百万 token 单价。
+- `computeSessionPricing` 按消息累加输入、缓存读、缓存写和输出单价；Detail 段展示读取节省、写入溢价和缓存净值。
+- 动态规则生效且所有消息都有单价时，主 session 成本使用逐消息重算结果；否则使用 OpenCode 的混合消息成本。
 - Agents 段：**Saved** 行汇总所有子 session 的节省金额（`computeSubsSaved`）。
 - 单价不可用或节省为零时，所有 pricing 行隐藏。
 

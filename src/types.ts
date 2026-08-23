@@ -1,4 +1,6 @@
 export type SessionSnapshot = {
+  /** Provider/model lineage when this snapshot represents one lineage. */
+  lineageKey?: string
   model: string
   providerID: string
   input: number
@@ -7,6 +9,30 @@ export type SessionSnapshot = {
   cacheRead: number
   cacheWrite: number
   cost: number
+}
+
+export type LineageCall = {
+  id?: string
+  created?: number
+  completed?: number
+  agent?: string
+  hitPercent: number | null
+}
+
+export type LineageBucket = {
+  key: string
+  providerID: string
+  modelID: string
+  callCount: number
+  input: number
+  output: number
+  reasoning: number
+  cacheRead: number
+  cacheWrite: number
+  cost: number
+  cacheRatio: number
+  lastCall?: LineageCall
+  agentCounts: Record<string, number>
 }
 
 export type SubAgentSummary = {
@@ -30,6 +56,7 @@ export type AssistantMessage = {
   messageID?: string
   modelID?: string
   providerID?: string
+  agent?: string
   cost?: number
   /** OpenCode SDK: true = summary/compaction message, not a full LLM pricing turn */
   summary?: boolean
@@ -115,6 +142,10 @@ export type OpenCodeTuiApi = {
   client: {
     session: {
       list: (opts: { query: { directory: string } }) => Promise<unknown>
+      messages?: (opts: {
+        path: { id: string }
+        query: { directory: string; limit: number }
+      }) => Promise<unknown>
     }
   }
   event: {

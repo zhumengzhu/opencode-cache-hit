@@ -11,11 +11,11 @@
 | 按时间查看每次 assistant 调用的 token / cache / cost / 命中率 | 替代 OpenCode 平台日志（`~/.local/share/opencode/log`） |
 | 区分主 session 与子 session 的调用 | 在 TUI 里实时 `console.log` 刷屏 |
 | 本地落盘，便于事后用 jq / 脚本分析 | 上传云端、团队共享 |
-| 与现有 `stats.ts` 口径一致（含 `summary` 跳过规则） | 第一期就做 SQLite、图表、递归子 agent |
+| 与现有 `stats.ts` 口径一致（含 summary 与 compaction 跳过规则） | 第一期就做 SQLite、图表、递归子 agent |
 
 ## 核心概念
 
-**一条时间轴事件 = 一次「可计费的 assistant 轮次」**，与侧栏顶栏 **Hit** 行同源，不是 tool part、不是 user 消息。
+**一条时间轴事件 = 一次 assistant 轮次**。summary 或 compaction 行通过 `skippedForMetrics` 标记。交互指标行与侧栏顶栏 **Hit** 行同源，不是 tool part、不是 user 消息。
 
 ```mermaid
 flowchart LR
@@ -28,8 +28,8 @@ flowchart LR
 | 字段 | 来源 |
 |------|------|
 | 时间排序键 | `time.completed ?? time.created`（已有 `timingFromAssistantMessage`） |
-| 是否计入 Hit 趋势 | `summary !== true` 且 `input + cache.read > 0`（对齐 `computePerCallHitTrend`） |
-| 会话累计 | 仍用 `aggregateSessionFromMessages`（可后续让累计也跳过 `summary`） |
+| 是否计入 Hit 趋势 | `summary !== true`、`agent !== "compaction"` 且 `input + cache.read > 0` |
+| 会话累计 | 使用带 interactive-message predicate 的 `aggregateSessionFromMessages` |
 
 ## 数据模型
 
@@ -60,8 +60,10 @@ export type LlmCallRecord = {
   cost: number
   /** 单轮 cache 命中率 0–100；无分母时为 null */
   hitPercent: number | null
-  /** compaction / summary 消息 */
-  skippedForHit: boolean
+   /** compaction / summary 消息 */
+   skippedForHit: boolean
+   /** compaction / summary 消息；原始行仍可保留 */
+   skippedForMetrics: boolean
   ttftMs?: number          // 首 Token 延迟（firstPartTime - created）
   ttftSource?: "sdk" | "tui"  // TTFT 数据来源
   tps?: number             // 每秒 Token 数（(output + reasoning) / genTime * 1000）
@@ -153,8 +155,11 @@ export type LlmCallRecord = {
 
 - 只处理 `role === assistant`。
 - `skippedForHit = msg.summary === true`。
+- `skippedForMetrics = msg.summary === true || msg.agent === "compaction"`。
 - `hitPercent` 与 `computePerCallHitTrend` 单条算法一致。
 - 子 session：对 `childIds` 中的 `sessionID` 同样走 `handleMessage`（v1 不做批量合并排序）。
+
+时间轴收集与侧栏过滤相互独立。`logSummaryMessages: true` 时，summary 和 compaction 行仍写入 JSONL，并标记 `skippedForMetrics: true`。这些行不会改变命中率、token、速度、费用、节省或 TTL 指标。
 
 ## 存储
 
@@ -386,7 +391,7 @@ bun scripts/timeline-dashboard.ts --open
 ## 示例 JSONL 行
 
 ```json
-{"schema":1,"recordedAt":"2024-05-30T08:00:00.000+08:00","sessionId":"sess_main","rootSessionId":"sess_main","scope":"main","messageKey":"sess_main:m1","modelId":"deepseek/v4","created":"2024-05-30T07:59:50.000+08:00","completedAt":"2024-05-30T08:00:00.000+08:00","durationMs":10000,"isComplete":true,"input":1200,"output":80,"reasoning":0,"cacheRead":38000,"cacheWrite":0,"cost":0.012,"hitPercent":96.9,"skippedForHit":false,"ttftMs":944,"ttftSource":"sdk","tps":8.83,"tpot":114.63,"itlP50":12,"itlP90":15,"itlCount":5,"finish":"stop"}
+{"schema":1,"recordedAt":"2024-05-30T08:00:00.000+08:00","sessionId":"sess_main","rootSessionId":"sess_main","scope":"main","messageKey":"sess_main:m1","modelId":"deepseek/v4","created":"2024-05-30T07:59:50.000+08:00","completedAt":"2024-05-30T08:00:00.000+08:00","durationMs":10000,"isComplete":true,"input":1200,"output":80,"reasoning":0,"cacheRead":38000,"cacheWrite":0,"cost":0.012,"hitPercent":96.9,"skippedForHit":false,"skippedForMetrics":false,"ttftMs":944,"ttftSource":"sdk","tps":8.83,"tpot":114.63,"itlP50":12,"itlP90":15,"itlCount":5,"finish":"stop"}
 ```
 
 ---

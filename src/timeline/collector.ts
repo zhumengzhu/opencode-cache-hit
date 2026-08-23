@@ -4,6 +4,7 @@ import type { ToolTimingTracker } from "../tool-timing.ts"
 import type { TimelineConfig } from "../plugin-config.ts"
 import type { AssistantMessage } from "../types.ts"
 import { assistantMessageToRecord } from "./records.ts"
+import { isInteractiveAssistantMessage } from "../stats.ts"
 import {
   appendTimelineRecord,
   localDateKey,
@@ -82,7 +83,7 @@ export function createTimelineCollector(opts: {
     }
 
     if (msg.role !== "assistant") return
-    if (!config.logSummaryMessages && msg.summary === true) return
+    if (!config.logSummaryMessages && !isInteractiveAssistantMessage(msg)) return
 
     maybePurge(config)
 

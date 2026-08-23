@@ -1,15 +1,17 @@
 /** @jsxImportSource @opentui/solid */
-import { Show, createMemo } from "solid-js"
+import { Show, createMemo, createSignal, onCleanup } from "solid-js"
 import { TokenDetailRows } from "./cache-hit-rows.tsx"
 import { CacheTTLView } from "./cache-ttl-view.tsx"
 import { formatStreamingNowDisplay, type StreamingPhase } from "./streaming-state.ts"
 import type { CacheHitMetrics } from "./use-cache-hit-metrics.ts"
 import type { CacheTTLConfig } from "./plugin-config.ts"
 import type { AssistantMessage } from "./types.ts"
+import { formatRatioAsPercent } from "./format-cache-ui.ts"
 import {
   TuiHitRow,
   TuiMetricRow,
   TuiSection,
+  truncateVisual,
   type PanelLayout,
   type SectionFold,
 } from "./tui-panel/index.ts"
@@ -21,6 +23,7 @@ export function MainSessionView(props: {
   detail: SectionFold
   speed: SectionFold
   model: SectionFold
+  lineages: SectionFold
   showSpeed: boolean
   streamingNow: Accessor<{ phase: StreamingPhase; speed: number }>
   formatCost: (n: number) => string
@@ -29,6 +32,11 @@ export function MainSessionView(props: {
   messages?: Accessor<AssistantMessage[]>
 }) {
   const { m, layout } = props
+  const [ttlNow, setTtlNow] = createSignal(Date.now())
+  const ttlTimer = props.cacheTTL?.enabled ? setInterval(() => setTtlNow(Date.now()), 1000) : undefined
+  onCleanup(() => {
+    if (ttlTimer !== undefined) clearInterval(ttlTimer)
+  })
   const streamingNowRow = createMemo(() => {
     const now = props.streamingNow()
     return formatStreamingNowDisplay(now.phase, now.speed, m.t().streamingIdle, m.useTps())
@@ -36,9 +44,11 @@ export function MainSessionView(props: {
 
   /** Show the recomputed cost (≈ prefix) when dynamic rules apply, else OpenCode's msg.cost. */
   const shownCost = createMemo(() => {
-    const rec = m.recomputedCost()
-    if (rec && rec.dynamic) return { value: rec.cost, approx: true }
-    return { value: m.main().cost, approx: false }
+    const pricing = m.sessionPricing()
+    if (pricing.counted > 0 && pricing.dynamic && pricing.unpriced === 0) {
+      return { value: pricing.cost, approx: true }
+    }
+    return { value: m.blendedMain().cost, approx: false }
   })
 
   const rateLabel = createMemo(() => {
@@ -58,13 +68,15 @@ export function MainSessionView(props: {
         barColor={m.hitColor()}
         textColor={m.pal().text}
         trend={
-          m.perCall().hasTrend ? { text: m.trendLabel(), color: m.trendFg() } : undefined
+          m.trendLabel() ? { text: m.trendLabel(), color: m.trendFg() } : undefined
         }
       />
       <TuiMetricRow pal={m.pal()} layout={layout} label={m.t().totalHit} value={m.sessionPct()} />
-      <Show when={props.cacheTTL?.enabled && props.cacheTTL?.providers && props.messages}>
+      <Show when={props.cacheTTL?.enabled && props.cacheTTL?.providers}>
         <CacheTTLView
-          messages={props.messages}
+          messages={m.metricMessages}
+          lineageKey={m.activeLineageKey}
+          now={ttlNow}
           config={props.cacheTTL}
           pal={m.pal()}
           layout={layout}
@@ -80,13 +92,31 @@ export function MainSessionView(props: {
         onToggle={props.detail.toggle}
       >
         <TokenDetailRows pal={m.pal()} layout={layout} t={m.t()} snap={m.main()}>
-          <Show when={m.pricing().saved > 0}>
+          <Show when={m.sessionPricing().readSavings !== 0}>
             <TuiMetricRow
               pal={m.pal()}
               layout={layout}
-              label={m.t().saved}
-              value={props.formatCost(m.pricing().saved)}
+              label={m.t().readSavings}
+              value={props.formatCost(m.sessionPricing().readSavings)}
               fg={m.pal().success}
+            />
+          </Show>
+          <Show when={m.sessionPricing().writePremium !== 0}>
+            <TuiMetricRow
+              pal={m.pal()}
+              layout={layout}
+              label={m.t().writePremium}
+              value={props.formatCost(m.sessionPricing().writePremium)}
+              fg={m.pal().warning}
+            />
+          </Show>
+          <Show when={m.sessionPricing().netCacheValue !== 0}>
+            <TuiMetricRow
+              pal={m.pal()}
+              layout={layout}
+              label={m.t().netCacheValue}
+              value={props.formatCost(m.sessionPricing().netCacheValue)}
+              fg={m.sessionPricing().netCacheValue > 0 ? m.pal().success : m.pal().error}
             />
           </Show>
         </TokenDetailRows>
@@ -184,6 +214,50 @@ export function MainSessionView(props: {
           />
         </Show>
       </TuiSection>
+
+      <Show when={m.lineages().length > 1}>
+        <TuiSection
+          pal={m.pal()}
+          layout={layout}
+          open={props.lineages.open()}
+          title={m.t().secLineages}
+          onToggle={props.lineages.toggle}
+        >
+          {m.recentLineages().map((lineage) => {
+            const model = lineage.modelID ? `${lineage.providerID}/${lineage.modelID.split("/").pop()}` : m.t().unknown
+            const agents = Object.entries(lineage.agentCounts)
+              .map(([agent, count]) => `${agent}:${count}`)
+              .join(",")
+            const label = truncateVisual(
+              agents ? `${model} ${agents}` : model,
+              Math.max(8, layout.gauge() - 10),
+            )
+            return (
+              <>
+                <TuiMetricRow
+                  pal={m.pal()}
+                  layout={layout}
+                  label={label}
+                  value={formatRatioAsPercent(lineage.cacheRatio)}
+                  unit={`${lineage.callCount}c`}
+                  labelFg={lineage.key === m.activeLineageKey() ? m.pal().text : m.pal().muted}
+                />
+                <Show when={props.cacheTTL?.enabled && props.cacheTTL?.providers}>
+                  <CacheTTLView
+                    messages={m.metricMessages}
+                    lineageKey={() => lineage.key}
+                    now={ttlNow}
+                    config={props.cacheTTL}
+                    pal={m.pal()}
+                    layout={layout}
+                    label={`${m.t().secTTL} ${truncateVisual(model, Math.max(8, layout.gauge() - 8))}`}
+                  />
+                </Show>
+              </>
+            )
+          })}
+        </TuiSection>
+      </Show>
     </>
   )
 }

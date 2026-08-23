@@ -1,5 +1,7 @@
 # 前端迁移方案：session.get() 聚合数据
 
+> **历史状态：** 本文描述的 `session.get()` 迁移不再是主 session 交互指标的主要数据源。当前 lineage 实现直接请求主 session 消息（`limit: 10000`），过滤 summary 与 compaction 调用；`session.get()` 仅作为 snapshot 和子 session 数据的兜底。详见 [design.md](./design.md)。
+
 ## 概述
 
 cache-hit 插件此前通过遍历 `api.state.session.messages()` 逐条累加 per-message 字段来统计 cost/token。这个路径受 OpenCode TUI sync 的 **100 条消息上限** 限制（[issue #31513]），超过 100 条消息的会话数据被静默截断。

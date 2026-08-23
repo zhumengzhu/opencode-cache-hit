@@ -58,6 +58,11 @@ describe("computeAvgTokenSpeed", () => {
     expect(computeAvgTokenSpeed(msgs)).toBe(0)
   })
 
+  test("skips compaction messages", () => {
+    const msgs = [{ agent: "compaction", tokens: { output: 100 }, time: { created: 0, completed: 1000 } }]
+    expect(computeAvgTokenSpeed(msgs)).toBe(0)
+  })
+
   test("skips messages with duration < 500ms", () => {
     const msgs = [
       {
@@ -156,6 +161,11 @@ describe("computeAvgTokenTpotMs", () => {
     const msgs = [
       { summary: true, tokens: { output: 100 }, time: { created: 0, completed: 1000 } },
     ]
+    expect(computeAvgTokenTpotMs(msgs)).toBeUndefined()
+  })
+
+  test("skips compaction messages", () => {
+    const msgs = [{ agent: "compaction", tokens: { output: 100 }, time: { created: 0, completed: 1000 } }]
     expect(computeAvgTokenTpotMs(msgs)).toBeUndefined()
   })
 
