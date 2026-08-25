@@ -31,7 +31,7 @@ The **tool-part TTFT fallback** (capturing `tool.pending` as first-response time
 
 ## Features
 
-- **Cache hit rate**: active provider/model lineage total + **per-turn** rate with trend (↑ / ↓ / `-`) on the main block
+- **Cache hit rate**: session-level total (DB aggregate when available) + **per-turn** rate with trend (↑ / ↓ / `-`) on the main block
 - **Token breakdown**: cache read / write / miss / output (aligned rows with visual-cache)
 - **Cost**: per-message model rates with multi-currency config (`USD`, `CNY`, `EUR`, `GBP`, `JPY`); read savings, write premium, and net cache value; **dynamic pricing** for time-of-day tiers (DeepSeek peak/off-peak) and context tiers (`context_over_200k`, e.g. GPT-5.6)
 - **Sub-agents**: **Agents** section rolls up **child sessions only** (scope labeled in UI); each row shows model name + session ID suffix with **vendor-tinted** label (cost in muted gray)
@@ -137,11 +137,11 @@ Supported display currencies in config: `USD`, `CNY`, `EUR`, `GBP`, `JPY` (see `
 
 ### Model lineages and metric history
 
-The main Hit, Total Hit, and cache TTL values use the active provider/model lineage. Cost, read savings, write premium, and net cache value sum eligible messages with each message's provider/model rates. The foldable **Models** section shows recent lineages separately.
+The main Hit, Total Hit, and cost values use the DB-level session aggregate when available (`session.get`, complete regardless of message-source caps), keeping the active lineage as the model identifier; the cache TTL follows the active lineage. Read savings, write premium, and net cache value sum eligible messages with each message's provider/model rates. The foldable **Models** section shows per-lineage buckets separately.
 
 The plugin excludes assistant messages with `summary: true` or `agent: "compaction"` from interactive metrics. Timeline JSONL keeps these rows when `timeline.logSummaryMessages` is enabled and marks them with `skippedForMetrics: true`.
 
-The plugin requests main-session history directly with a limit of 10,000 messages. It reports a capped or unavailable source internally and falls back to the live TUI mirror when needed. The live mirror can contain only the 100 most recent messages. Streaming speed and TTFT use this live mirror so they can update during a call. If a message has no matching rate, the cost row keeps OpenCode's reported blended cost instead of showing a partial recomputation.
+The plugin requests main-session history directly with a limit of 10,000 messages. When that request fails and the mirror has filled its 100-message cap, or the returned history reaches the 10,000 limit, the panel shows a `* history truncated` hint. Streaming speed and TTFT use this live mirror so they can update during a call. If a message has no matching rate, the cost row keeps OpenCode's reported blended cost instead of showing a partial recomputation.
 
 ### Timeline logs (`timeline`, default off)
 
@@ -265,7 +265,7 @@ Per-model rules support two forms (explicit config wins over the built-in DeepSe
 - `levels`: absolute rates per level, e.g. `{"peak": {"input": 0.44, "output": 0.88, "cacheRead": 0.01}, "offpeak": {"input": 0.22, ...}}`. Cache rates may be written as flat `cacheRead`/`cacheWrite` (or `cache_read`/`cache_write`) or nested `cache: {"read": …, "write": …}` (both are accepted; flat wins if both present). Default unit is **USD per 1M** (same as `state.provider`). To write prices in another currency, set `"currency": "CNY"` and either make it match the display `cost.currency` (converted via `cost.rate`) or provide the per-rule `"rate"` (USD → that currency, e.g. `"rate": 1.08` for EUR). If the currency cannot be converted (no `rate`, currency ≠ display currency), a warning is logged to stderr and the values are treated as USD. `multipliers` are ratios and have no currency.
 - `contextThreshold`: per-model override of the global threshold (wins over the runtime tier size from `state.provider`).
 
-Rates shown in the sidebar switch automatically at schedule boundaries (no polling). The `peak`/`off-peak` badge on the rate row appears **only when the model actually prices that level** (the level exists in its explicit `levels`/`multipliers`, or the built-in DeepSeek default applies); plain static models and unpriced levels (e.g. a peak-only rule at an off-peak moment) show no badge. Session cost shown is recomputed per message from its provider/model, request time, and context tier when dynamic rules apply (marked `≈`); otherwise OpenCode's own `msg.cost` is used. If a message has no matching rate, the cost row keeps OpenCode's reported blended cost instead of showing a partial recomputation. Read savings, write premium, and net cache value use the same per-message rates. Sub-agent rows use their **session creation time** (`session.list`) for time-of-day pricing (marked `≈` on the Agents total when any child was recomputed).
+Rates shown in the sidebar switch automatically at schedule boundaries (no polling). The `peak`/`off-peak` badge on the rate row appears **only when the model actually prices that level** (the level exists in its explicit `levels`/`multipliers`, or the built-in DeepSeek default applies); plain static models and unpriced levels (e.g. a peak-only rule at an off-peak moment) show no badge. Session cost shown is recomputed per message from its provider/model, request time, and context tier when dynamic rules apply; otherwise OpenCode's own `msg.cost` is used. If a message has no matching rate, the cost row keeps OpenCode's reported blended cost instead of showing a partial recomputation. Read savings, write premium, and net cache value use the same per-message rates. Sub-agent rows use their **session creation time** (`session.list`) for time-of-day pricing.
 
 > [!NOTE]
 > **Migration (weekday-aware schedules).** Schedules now support an optional `days` field (ISO weekday, 1=Monday … 7=Sunday; omitted = every day) and a catch-all **fallback level** (a level with empty `windows`). DeepSeek's official peak is **Monday–Friday** 09:00-12:00 / 14:00-18:00 Beijing time; weekends are off-peak. The built-in default schedule is weekday-aware, and new configs written from the examples above are too. **Legacy configs without `days` keep the old behavior — weekends are still billed as peak.** To pick up the fix, add `"days": [1,2,3,4,5]` to your `peak` windows (or use the new default schedule with an `offpeak` fallback). If you resolve a DeepSeek model while your configured schedule has windowed levels but no `days`, the plugin logs a one-time hint to stderr.
@@ -290,7 +290,7 @@ Then reinstall via `Ctrl+P` → install plugin, and **restart OpenCode**.
 To avoid the pinning issue entirely, install a **pinned version** instead of `@latest`:
 
 ```jsonc
-{ "plugin": ["opencode-cache-hit@0.7.2"] }
+{ "plugin": ["opencode-cache-hit@0.7.3"] }
 ```
 
 ## Compatibility

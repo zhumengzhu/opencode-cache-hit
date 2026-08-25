@@ -41,8 +41,6 @@ export type UiStrings = {
   ttft: string
   /** Shown in Speed → Now when no stream is active (not a missing-data dash). */
   streamingIdle: string
-  /** Prefix for session cost recomputed from dynamic pricing. */
-  approx: string
   /** Time-of-day tier badges appended to the Rate label. */
   peakBadge: string
   offpeakBadge: string
@@ -89,7 +87,6 @@ const EN: UiStrings = {
   warmingState: "warming",
   ttft: "TTFT:",
   streamingIdle: "·",
-  approx: "≈",
   peakBadge: "peak",
   offpeakBadge: "offpeak",
   over200kBadge: ">200k",
@@ -134,7 +131,6 @@ const ZH: UiStrings = {
   warmingState: "预热",
   ttft: "首Token:",
   streamingIdle: "·",
-  approx: "≈",
   peakBadge: "高峰",
   offpeakBadge: "空闲",
   over200kBadge: ">200k",

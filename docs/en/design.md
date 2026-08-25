@@ -47,7 +47,7 @@ flowchart TB
 - Config file: `~/.config/opencode/cache-hit.json` (preferred) or `cache-hit.config.json` at plugin root (legacy). Defaults in `plugin-config.ts`.
 - Interactive metrics exclude messages with `summary: true` or `agent: "compaction"`.
 - Main-session lineage metrics group direct-history messages by `providerID:modelID`. Missing metadata uses the `unknown` bucket.
-- Mixed-model cost, read savings, write premium, and net cache value use each message's provider/model rates. A dynamic result is marked `≈`. If any message has no matching rate, the cost row keeps OpenCode's reported blended cost.
+- Mixed-model cost, read savings, write premium, and net cache value use each message's provider/model rates. If any message has no matching rate, the cost row keeps OpenCode's reported blended cost.
 
 ## Dynamic pricing (`dynamicPricing`)
 
@@ -59,7 +59,7 @@ Two orthogonal price dimensions resolve to the effective per-1M rates shown in t
 Lookup fallback chain (`src/dynamic-pricing/lookup.ts`): explicit `levels` → explicit `multipliers` → built-in DeepSeek default → static `state.provider` cost.
 
 - `src/dynamic-pricing/schedule.ts`: timezone-aware window matching (`Intl.DateTimeFormat`), `nextBoundaryMs` drives a `setTimeout`-based refresh in `use-cache-hit-metrics.ts` — no polling.
-- Session cost recompute (`src/dynamic-pricing/recompute.ts`): per message, `msg.time.created` selects the tier, total context (`input + cacheRead`) the context tier; `tokens.input` excludes cache, so cache reads are billed separately at `cacheReadRate`. Shown with `≈` when dynamic rules applied.
+- Session cost recompute (`src/dynamic-pricing/recompute.ts`): per message, `msg.time.created` selects the tier, total context (`input + cacheRead`) the context tier; `tokens.input` excludes cache, so cache reads are billed separately at `cacheReadRate`.
 - Sub-agents: `session.list` entries carry `time.created` (`src/session-list.ts` → `child-session-sync.ts`), so each child's cost can be recomputed at its creation time (`recomputeSubAgentCost`).
 - Timeline dashboard (`scripts/timeline-dashboard.ts`): offline recompute reads provider rates from `~/.config/opencode/opencode.json` (JSONC-aware) and injects `dynCost` per `LlmCallRecord` (shown with `≈`, counted in charts/totals).
 
@@ -178,17 +178,17 @@ Implementation: `agents-view.tsx` calls `formatSubAgentLabel` + `modelRowColor`;
 
 | Data | Trigger |
 |------|---------|
-| Main metric history | Direct `session.messages(sid, limit=10000)`; fallback to the TUI mirror with `capped` or `unavailable` status |
+| Main metric history | Direct `session.messages(sid, limit=10000)`; fallback to the TUI mirror — `unavailable` once the 100-message mirror fills, `capped` when the direct history hits 10k |
 | Main fast messages | `createMemo` reads `refreshTick` + the TUI mirror for streaming speed and TTFT |
 | Main snapshot fallback | `session.get?.(sid)` aggregate, then the TUI mirror |
 | Sub-agent content | `refreshTick` + `childIds` → `session.get?.(cid)` per child; fallback `messages(cid)` |
 | Sub-agent ids | `session.list` callback / debounced refresh on foreign activity |
 
-`sidebar-host` subscribes to `message.updated` and bumps `refreshTick` so dependent memos recompute. Main lineage totals use direct history. Streaming speed and TTFT use the TUI mirror. Child totals use `session.get()` when available.
+`sidebar-host` subscribes to `message.updated` and bumps `refreshTick` so dependent memos recompute. Main metric totals prefer the DB-level `session.get` aggregate (complete, not capped); lineage buckets use direct history. Streaming speed and TTFT use the TUI mirror. Child totals use `session.get()` when available.
 
 ### session.get() availability
 
-`session.get()` provides DB-level aggregates (not capped at 100 messages), but was added in [opencode#26644](https://github.com/anomalyco/opencode/pull/26644) (2026-05-12). Forks that split before this commit — including MiMo-Code — lack the method. The main metric path requests direct session messages with a 10,000-message limit. If that request is unavailable or reaches the limit, it falls back to the TUI mirror, which contains at most the 100 most recent assistant messages per call.
+`session.get()` provides DB-level aggregates (not capped at 100 messages), but was added in [opencode#26644](https://github.com/anomalyco/opencode/pull/26644) (2026-05-12). Forks that split before this commit — including MiMo-Code — lack the method. The main metric path prefers the DB-level `session.get` aggregate; when it is absent or empty it requests direct session messages with a 10,000-message limit. If that request fails once the mirror has filled its 100-message cap, the source is marked `unavailable`; a returned history at the 10,000 limit is marked `capped`. The mirror itself contains at most the 100 most recent messages per call.
 
 ### Accumulation rules
 

@@ -23,21 +23,15 @@ export function AgentsView(props: {
 
   const subsSaved = () => m.subsSaved()
 
-  // Sub-agent dynamic cost total: show the recomputed value (≈ prefix) when any child is dynamic.
+  // Sub-agent cost total: recomputed value where a child has dynamic pricing, else its msg.cost.
   const shownSubCost = createMemo(() => {
     const map = m.subAgentDynamicCosts()
-    let dynamic = false
     let sum = 0
     for (const sub of m.subs()) {
       const rec = map.get(sub.id)
-      if (rec !== undefined && rec !== null) {
-        dynamic = true
-        sum += rec
-      } else {
-        sum += sub.cost
-      }
+      sum += rec !== undefined && rec !== null ? rec : sub.cost
     }
-    return { value: sum, approx: dynamic }
+    return sum
   })
 
   return (
@@ -53,12 +47,12 @@ export function AgentsView(props: {
           />
         </Show>
       </TokenDetailRows>
-      <Show when={shownSubCost().value > 0}>
+      <Show when={shownSubCost() > 0}>
         <TuiMetricRow
           pal={m.pal()}
           layout={layout}
           label={m.t().cost}
-          value={`${shownSubCost().approx ? m.t().approx : ""}${props.formatCost(shownSubCost().value)}`}
+          value={props.formatCost(shownSubCost())}
           fg={m.pal().success}
         />
       </Show>

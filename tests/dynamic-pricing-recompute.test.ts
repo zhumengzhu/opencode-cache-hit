@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
-import { recomputeSessionCost, recomputeSubAgentCost, recomputeRecordCost } from "../src/dynamic-pricing/recompute.ts"
+import { recomputeSubAgentCost, recomputeRecordCost } from "../src/dynamic-pricing/recompute.ts"
 import { normalizeDynamicPricingConfig } from "../src/plugin-config.ts"
-import type { AssistantMessage, ProviderInfo } from "../src/types.ts"
+import type { ProviderInfo } from "../src/types.ts"
 import { DEFAULT_SCHEDULE } from "../src/dynamic-pricing/types.ts"
 
 const TZ = "Asia/Shanghai"
@@ -41,80 +41,6 @@ const RULES = {
   contextThreshold: 200_000,
   providers: {},
 }
-
-function msg(partial: Partial<AssistantMessage> & Pick<AssistantMessage, "id">): AssistantMessage {
-  return { role: "assistant", ...partial }
-}
-
-describe("recomputeSessionCost", () => {
-  test("prices each message by its own request time (peak vs offpeak)", () => {
-    const messages = [
-      msg({
-        id: "m1",
-        providerID: "deepseek",
-        modelID: "deepseek/deepseek-v4-flash",
-        time: { created: bjt(2026, 8, 10, 10, 0) }, // peak
-        tokens: { input: 100_000, output: 10_000, cache: { read: 50_000 } },
-      }),
-      msg({
-        id: "m2",
-        providerID: "deepseek",
-        modelID: "deepseek/deepseek-v4-flash",
-        time: { created: bjt(2026, 8, 10, 22, 0) }, // offpeak → 半价
-        tokens: { input: 100_000, output: 10_000, cache: { read: 50_000 } },
-      }),
-    ]
-    const result = recomputeSessionCost(messages, PROVIDERS, RULES)
-    expect(result).not.toBeNull()
-    // opencode 语义：tokens.input 不含缓存 → input 全量按 inputRate，缓存按 cacheReadRate 单独计费。
-    // m1: (100k*0.5 + 10k*1.0 + 50k*0.01)/1M
-    const m1 = (100_000 * 0.5 + 10_000 * 1.0 + 50_000 * 0.01) / 1_000_000
-    const m2 = m1 / 2
-    expect(result!.cost).toBeCloseTo(m1 + m2, 10)
-    expect(result!.counted).toBe(2)
-    expect(result!.dynamic).toBe(true)
-  })
-
-  test("context tier per message", () => {
-    const messages = [
-      msg({
-        id: "m1",
-        providerID: "openai",
-        modelID: "gpt-5.6",
-        time: { created: bjt(2026, 8, 10, 10, 0) },
-        tokens: { input: 100_000, output: 1_000 }, // ≤200k → base
-      }),
-      msg({
-        id: "m2",
-        providerID: "openai",
-        modelID: "gpt-5.6",
-        time: { created: bjt(2026, 8, 10, 11, 0) },
-        tokens: { input: 300_000, output: 1_000 }, // >200k → over
-      }),
-    ]
-    const result = recomputeSessionCost(messages, PROVIDERS, RULES)
-    const expected = (100_000 * 1.0 + 1_000 * 3.0 + 300_000 * 2.0 + 1_000 * 5.0) / 1_000_000
-    expect(result!.cost).toBeCloseTo(expected, 10)
-  })
-
-  test("returns null when nothing is pricable", () => {
-    expect(recomputeSessionCost([], PROVIDERS, RULES)).toBeNull()
-    expect(
-      recomputeSessionCost([msg({ id: "x", tokens: {} })], PROVIDERS, RULES),
-    ).toBeNull()
-    expect(
-      recomputeSessionCost([msg({ id: "x", providerID: "nope", modelID: "nope", tokens: { input: 100 } })], PROVIDERS, RULES),
-    ).toBeNull()
-  })
-
-  test("excludes compaction messages", () => {
-    const result = recomputeSessionCost([
-      msg({ id: "compact", agent: "compaction", providerID: "deepseek", modelID: "deepseek/deepseek-v4-flash", tokens: { input: 100, output: 10 } }),
-      msg({ id: "normal", providerID: "deepseek", modelID: "deepseek/deepseek-v4-flash", tokens: { input: 100, output: 10 } }),
-    ], PROVIDERS, RULES)
-    expect(result?.counted).toBe(1)
-  })
-})
 
 describe("recomputeSubAgentCost", () => {
   test("uses session created time for time-of-day pricing", () => {

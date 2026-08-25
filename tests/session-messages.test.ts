@@ -43,7 +43,7 @@ describe("loadSessionMessages", () => {
     expect(result).toEqual({ messages: [], status: "complete", source: "direct" })
   })
 
-  test("falls back to the mirror for malformed responses", async () => {
+  test("falls back to the mirror for malformed responses (below mirror cap → complete)", async () => {
     const result = await loadSessionMessages({
       client: { messages: async () => ({ data: [{ bad: true }] }) },
       sessionId: "s1",
@@ -51,12 +51,12 @@ describe("loadSessionMessages", () => {
       fallback,
     })
     expect(result.messages).toEqual(fallback)
-    expect(result.status).toBe("unavailable")
+    expect(result.status).toBe("complete")
     expect(result.source).toBe("mirror")
-    expect(result.reason).toBe("malformed-response")
+    expect(result.reason).toBeUndefined()
   })
 
-  test("falls back when the direct client is unavailable", async () => {
+  test("falls back when the direct client is unavailable (below mirror cap → complete)", async () => {
     const result = await loadSessionMessages({
       client: {},
       sessionId: "s1",
@@ -65,10 +65,26 @@ describe("loadSessionMessages", () => {
     })
     expect(result).toEqual({
       messages: fallback,
-      status: "unavailable",
+      status: "complete",
       source: "mirror",
-      reason: "missing-client",
     })
+  })
+
+  test("marks a full mirror as unavailable (may be truncated)", async () => {
+    const fullMirror = Array.from({ length: 100 }, (_, i) => ({
+      role: "assistant" as const,
+      id: `m${i}`,
+      tokens: { input: 1 },
+    }))
+    const result = await loadSessionMessages({
+      client: {},
+      sessionId: "s1",
+      directory: "/work",
+      fallback: fullMirror,
+    })
+    expect(result.status).toBe("unavailable")
+    expect(result.source).toBe("mirror")
+    expect(result.reason).toBe("missing-client")
   })
 
   test("marks an exact limit response as potentially capped", async () => {

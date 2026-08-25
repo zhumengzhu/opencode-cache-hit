@@ -1,58 +1,7 @@
-import type { AssistantMessage, ProviderInfo, SubAgentSummary } from "../types.ts"
-import { isInteractiveAssistantMessage } from "../stats.ts"
+import type { ProviderInfo, SubAgentSummary } from "../types.ts"
 import { billingCost } from "./context.ts"
 import { resolveModelCost } from "./lookup.ts"
 import type { DynamicPricingConfig } from "./types.ts"
-
-export type RecomputeResult = {
-  /** Total cost recomputed per message (request time + context size), in USD. */
-  cost: number
-  /** Number of messages included (have tokens and a price). */
-  counted: number
-  /** Whether any message applied dynamic rules (time-of-day / context tier / multipliers). */
-  dynamic: boolean
-}
-
-const EMPTY_RESULT: RecomputeResult = { cost: 0, counted: 0, dynamic: false }
-
-/**
- * Recompute session cost message by message:
- * - time-of-day: `msg.time.created` (request start) → level
- * - context: total input (`input + cacheRead`; opencode semantics: input excludes cache) → context_over_200k tier
- * - usage: input / output / cache.read / cache.write (input is the cache-miss part; cache billed separately)
- * Messages that cannot be priced (no tokens or no model price) are skipped. Nothing priceable → null.
- */
-export function recomputeSessionCost(
-  messages: ReadonlyArray<AssistantMessage>,
-  providers: ReadonlyArray<ProviderInfo>,
-  rules: DynamicPricingConfig | undefined,
-): RecomputeResult | null {
-  if (!messages.length) return null
-  let cost = 0
-  let counted = 0
-  let dynamic = false
-  for (const msg of messages) {
-    if (!isInteractiveAssistantMessage(msg)) continue
-    const tokens = msg.tokens
-    if (!tokens) continue
-    const input = tokens.input ?? 0
-    const output = tokens.output ?? 0
-    const cacheRead = tokens.cache?.read ?? 0
-    const cacheWrite = tokens.cache?.write ?? 0
-    if (input + output + cacheRead + cacheWrite === 0) continue
-    const resolved = resolveModelCost(providers, msg.providerID ?? "", msg.modelID ?? "", {
-      now: msg.time?.created,
-      contextTokens: input + cacheRead,
-      rules,
-    })
-    if (!resolved) continue
-    cost += billingCost(resolved.rates, input, output, cacheRead, cacheWrite)
-    counted += 1
-    if (resolved.explicit) dynamic = true
-  }
-  if (counted === 0) return null
-  return { cost, counted, dynamic }
-}
 
 /**
  * Sub-agent cost recompute: aggregate tokens + session creation time (`sub.created`)

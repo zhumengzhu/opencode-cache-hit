@@ -45,7 +45,7 @@ import {
  * (not capped at 100 messages). This method was added in opencode#26644
  * (2026-05-12) — forks that split earlier (e.g. MiMo-Code) lack it.
  * When absent, the code falls back to session.messages(), which is limited
- * to the most recent 100 assistant messages per call.
+ * to the most recent 100 messages per call.
  *
  * Timeline writes are event-driven: message.updated → handleMessage → appendFile.
  */
@@ -64,7 +64,7 @@ export function CacheHitSidebarHost(props: {
   const [childIds, setChildIds] = createSignal<string[]>([])
   const [childEntries, setChildEntries] = createSignal<SessionListEntry[]>([])
   const [historyMessages, setHistoryMessages] = createSignal<AssistantMessage[]>([])
-  const [historyStatus, setHistoryStatus] = createSignal<SessionMessageLoadStatus>("unavailable")
+  const [historyStatus, setHistoryStatus] = createSignal<SessionMessageLoadStatus>("complete")
   const pendingHistoryUpdates = new Map<string, AssistantMessage>()
   let historyLoadGeneration = 0
 
@@ -153,7 +153,10 @@ export function CacheHitSidebarHost(props: {
     pendingHistoryUpdates.clear()
     const mirror = untrack(mainMessages)
     setHistoryMessages(mirror)
-    setHistoryStatus("unavailable")
+    // Reset to "complete" so a session switch does not carry over the previous
+    // session's "capped"/"unavailable" status (which would flash the hint until
+    // the new load settles). The real status is set when the request completes.
+    setHistoryStatus("complete")
     if (!sid) return
     void loadSessionMessages({
       client: props.api.client.session,

@@ -69,21 +69,38 @@ export function useCacheHitMetrics(props: {
   const lineages = createMemo(() => aggregateLineages(metricInput()))
   const activeKey = createMemo(() => activeLineageKey(metricInput()))
   const activeLineage = createMemo(() => lineages().find((lineage) => lineage.key === activeKey()))
-  const blendedMain = createMemo(() => aggregateSessionFromMessages(metricInput()))
+  // DB-level session aggregate (session.get) when available; fall back to the loaded messages.
+  const blendedMain = createMemo(() => {
+    const base = props.main()
+    return mainSessionHasStats(base) ? base : aggregateSessionFromMessages(metricInput())
+  })
   const main = createMemo<SessionSnapshot>(() => {
+    const base = props.main()
     const active = activeLineage()
-    if (!active) return aggregateSessionFromMessages(metricInput())
-    return {
-      lineageKey: active.key,
-      model: active.modelID,
-      providerID: active.providerID,
-      input: active.input,
-      output: active.output,
-      reasoning: active.reasoning,
-      cacheRead: active.cacheRead,
-      cacheWrite: active.cacheWrite,
-      cost: active.cost,
+    if (mainSessionHasStats(base)) {
+      // DB-level session aggregate (session.get) is complete regardless of the
+      // message-source cap; keep the active lineage as the Model row identity.
+      return {
+        ...base,
+        lineageKey: active?.key ?? base.lineageKey,
+        model: active?.modelID ?? base.model,
+        providerID: active?.providerID ?? base.providerID,
+      }
     }
+    if (active) {
+      return {
+        lineageKey: active.key,
+        model: active.modelID,
+        providerID: active.providerID,
+        input: active.input,
+        output: active.output,
+        reasoning: active.reasoning,
+        cacheRead: active.cacheRead,
+        cacheWrite: active.cacheWrite,
+        cost: active.cost,
+      }
+    }
+    return aggregateSessionFromMessages(metricInput())
   })
   const perCall = createMemo(() => computePerCallHitTrend(metricInput()))
   const sessionRatio = createMemo(() => cacheHitRatio(main().cacheRead, main().input))
@@ -139,8 +156,11 @@ export function useCacheHitMetrics(props: {
 
   const mainHasStats = createMemo(() => mainSessionHasStats(main()))
   const hasData = createMemo(() => lineages().length > 0 || subs().length > 0)
+  // No interactive messages in the main session: show an empty Hit row, not "0.0% warming".
+  const noMainData = createMemo(() => lineages().length === 0)
 
   const trendLabel = createMemo(() => {
+    if (noMainData()) return ""
     if (perCall().state === "switch") return t().switchState
     if (perCall().state === "warming") return t().warmingState
     return perCall().hasTrend ? formatTrendLabel(perCall().trendPercent) : ""
@@ -151,8 +171,11 @@ export function useCacheHitMetrics(props: {
       computeHitBarWidth(hitLabel(), props.layout.gauge(), trendLabel(), trendLabel().length > 0),
     ),
   )
-  const hitColor = createMemo(() => hitRateColor(perCall().hitPercent, pal()))
+  const hitColor = createMemo(() =>
+    noMainData() ? pal().text : hitRateColor(perCall().hitPercent, pal()),
+  )
   const trendFg = createMemo(() => {
+    if (noMainData()) return pal().text
     if (perCall().state === "switch") return pal().warning
     if (perCall().state === "warming") return pal().muted
     const tr = perCall().trendPercent
@@ -161,9 +184,8 @@ export function useCacheHitMetrics(props: {
   })
 
   const collapsedHitSummary = createMemo(() => {
-    const right = trendLabel()
-      ? `${formatPercentOneDecimal(perCall().hitPercent)} ${t().hitFolded} ${trendLabel()}`
-      : `${formatPercentOneDecimal(perCall().hitPercent)} ${t().hitFolded}`
+    const left = noMainData() ? "-" : formatPercentOneDecimal(perCall().hitPercent)
+    const right = trendLabel() ? `${left} ${t().hitFolded} ${trendLabel()}` : `${left} ${t().hitFolded}`
     return { text: right, width: visualWidth(right) }
   })
 
@@ -267,14 +289,16 @@ export function useCacheHitMetrics(props: {
     perCall,
     pricing,
     sessionPricing,
-    sessionPct: createMemo(() => formatRatioAsPercent(sessionRatio())),
+    sessionPct: createMemo(() =>
+      mainSessionHasStats(main()) ? formatRatioAsPercent(sessionRatio()) : "-",
+    ),
 
     hasData,
     trendLabel,
     bar,
     hitColor,
     trendFg,
-    pctLabel: createMemo(() => formatPercentOneDecimal(perCall().hitPercent)),
+    pctLabel: createMemo(() => (noMainData() ? "-" : formatPercentOneDecimal(perCall().hitPercent))),
     modelShort: createMemo(() => shortModelName(main().model)),
     totalSubCost: createMemo(() => subs().reduce((s, a) => s + a.cost, 0)),
     subAgentDynamicCosts,

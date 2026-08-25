@@ -47,7 +47,7 @@ flowchart TB
 - 配置路径：优先 `~/.config/opencode/cache-hit.json`，兜底插件根目录 `cache-hit.config.json`。缺省见 `plugin-config.ts` 的 `DEFAULT_PLUGIN_CONFIG`。
 - 交互指标排除 `summary: true` 或 `agent: "compaction"` 的消息。
 - 主 session lineage 指标按 `providerID:modelID` 对直接历史消息分桶；缺少元数据的消息进入 `unknown` 分桶。
-- 混合模型的费用、读取节省、写入溢价和缓存净值使用每条消息自己的 provider/model 单价。动态重算结果标记 `≈`；如果有消息缺少单价，费用行保留 OpenCode 的混合费用。
+- 混合模型的费用、读取节省、写入溢价和缓存净值使用每条消息自己的 provider/model 单价。如果有消息缺少单价，费用行保留 OpenCode 的混合费用。
 
 ## 动态计价（`dynamicPricing`）
 
@@ -59,7 +59,7 @@ flowchart TB
 查找回退链（`src/dynamic-pricing/lookup.ts`）：显式 `levels` → 显式 `multipliers` → 内置 DeepSeek 默认 → `state.provider` 静态价。
 
 - `src/dynamic-pricing/schedule.ts`：基于时区的窗口匹配（`Intl.DateTimeFormat`，含 `tzWeekdayOf` 星期判定），`nextBoundaryMs` 星期感知地驱动 `use-cache-hit-metrics.ts` 中 `setTimeout` 精确刷新（周五 18:00 后直达周一 09:00，周末不轮询）——无需轮询。
-- 会话成本重算（`src/dynamic-pricing/recompute.ts`）：逐消息用 `msg.time.created` 选时段、总上下文（`input + cacheRead`）选上下文档；`tokens.input` 不含缓存，缓存命中部分按 `cacheReadRate` 单独计费。动态规则生效时展示标注 `≈`。
+- 会话成本重算（`src/dynamic-pricing/recompute.ts`）：逐消息用 `msg.time.created` 选时段、总上下文（`input + cacheRead`）选上下文档；`tokens.input` 不含缓存，缓存命中部分按 `cacheReadRate` 单独计费。
 - 子 agent：`session.list` 条目携带 `time.created`（`src/session-list.ts` → `child-session-sync.ts`），可按子会话创建时刻重算成本（`recomputeSubAgentCost`）。
 - 时间轴看板（`scripts/timeline-dashboard.ts`）：离线重算读取 `~/.config/opencode/opencode.json`（JSONC 感知）的 provider 单价，逐条向 `LlmCallRecord` 注入 `dynCost`（`≈` 展示并计入图表/合计）。
 
@@ -178,17 +178,17 @@ flowchart TD
 
 | 数据 | 触发方式 |
 |------|----------|
-| 主 session 指标历史 | 直接请求 `session.messages(sid, limit=10000)`；失败或达到上限时回退到 TUI 镜像，并标记 `capped` 或 `unavailable` |
+| 主 session 指标历史 | 直接请求 `session.messages(sid, limit=10000)`；回退到 TUI 镜像——镜像满 100 条时标记 `unavailable`，直接历史达 10,000 上限时标记 `capped` |
 | 主 session 实时消息 | `createMemo` 读取 `refreshTick` + TUI 镜像，用于流式速度和 TTFT |
 | 主 session snapshot 兜底 | `session.get?.(sid)` 聚合值，再回退到 TUI 镜像 |
 | 子 agent 列表内容 | `refreshTick` + `childIds` → 每个 child 的 `session.get?.(cid)`；fallback `messages(cid)` |
 | 子 agent id 集合 | `session.list` 完成回调 / `message.updated` 发现新 child |
 
-主 session **显式**订阅 `message.updated`（在 `sidebar-host`）：每次事件 `refreshTick++`，触发相关 memo 重算。主 lineage 总量使用直接历史；流式速度和 TTFT 使用 TUI 镜像；子 session 总量优先使用 `session.get()`。
+主 session 显式订阅 `message.updated`（在 `sidebar-host`）：每次事件 `refreshTick++`，触发相关 memo 重算。主指标总量优先 DB 级 `session.get` 聚合（完整、不受上限影响）；lineage 分桶使用直接历史。流式速度和 TTFT 使用 TUI 镜像；子 session 总量优先使用 `session.get()`。
 
 ### session.get() 可用性
 
-`session.get()` 提供数据库级聚合（不受 100 条消息限制），但在 [opencode#26644](https://github.com/anomalyco/opencode/pull/26644)（2026-05-12）才加入。在此之前 fork 的分支（含 MiMo-Code）缺少该方法。主指标路径直接请求最多 10,000 条 session 消息；请求不可用或达到上限时回退到 TUI 镜像，后者每次最多包含最近 100 条 assistant 消息。
+`session.get()` 提供数据库级聚合（不受 100 条消息限制），但在 [opencode#26644](https://github.com/anomalyco/opencode/pull/26644)（2026-05-12）才加入。在此之前 fork 的分支（含 MiMo-Code）缺少该方法。主指标路径优先使用 DB 级 `session.get` 聚合；缺失或为空时再直接请求最多 10,000 条 session 消息。请求失败且镜像已满 100 条时标记 `unavailable`，返回历史达 10,000 上限时标记 `capped`。镜像每次最多包含最近 100 条消息。
 
 ### 累加规则
 

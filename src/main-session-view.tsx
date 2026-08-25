@@ -42,13 +42,13 @@ export function MainSessionView(props: {
     return formatStreamingNowDisplay(now.phase, now.speed, m.t().streamingIdle, m.useTps())
   })
 
-  /** Show the recomputed cost (≈ prefix) when dynamic rules apply, else OpenCode's msg.cost. */
+  /** Use the per-message recomputed cost when dynamic rules price every message, else OpenCode's msg.cost. */
   const shownCost = createMemo(() => {
     const pricing = m.sessionPricing()
     if (pricing.counted > 0 && pricing.dynamic && pricing.unpriced === 0) {
-      return { value: pricing.cost, approx: true }
+      return pricing.cost
     }
-    return { value: m.blendedMain().cost, approx: false }
+    return m.blendedMain().cost
   })
 
   const rateLabel = createMemo(() => {
@@ -181,12 +181,12 @@ export function MainSessionView(props: {
         title={m.t().secModel}
         onToggle={props.model.toggle}
       >
-        <Show when={shownCost().value > 0}>
+        <Show when={shownCost() > 0}>
           <TuiMetricRow
             pal={m.pal()}
             layout={layout}
             label={m.t().cost}
-            value={`${shownCost().approx ? m.t().approx : ""}${props.formatCost(shownCost().value)}`}
+            value={props.formatCost(shownCost())}
             fg={m.pal().text}
           />
         </Show>

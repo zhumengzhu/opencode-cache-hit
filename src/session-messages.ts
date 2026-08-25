@@ -3,6 +3,9 @@ import type { AssistantMessage } from "./types.ts"
 /** The API has no total-count field, so keep the request well above the TUI mirror cap. */
 export const SESSION_MESSAGE_LIMIT = 10_000
 
+/** TUI state mirror caps at 100 most recent messages; at that size the history may be incomplete. */
+export const TUI_MIRROR_LIMIT = 100
+
 export type SessionMessageLoadStatus = "complete" | "capped" | "unavailable"
 
 export type SessionMessageLoadResult = {
@@ -39,6 +42,18 @@ function normalizeEntries(entries: readonly unknown[]): AssistantMessage[] | nul
   return messages
 }
 
+/** A mirror below its cap covers the whole session; only a full mirror may be truncated. */
+function fallbackResult(
+  fallback: readonly AssistantMessage[],
+  reason: "missing-client" | "request-failed" | "malformed-response",
+): SessionMessageLoadResult {
+  const messages = [...fallback]
+  if (messages.length < TUI_MIRROR_LIMIT) {
+    return { messages, status: "complete", source: "mirror" }
+  }
+  return { messages, status: "unavailable", source: "mirror", reason }
+}
+
 export async function loadSessionMessages(opts: {
   client: SessionMessagesClient
   sessionId: string
@@ -46,10 +61,10 @@ export async function loadSessionMessages(opts: {
   fallback: readonly AssistantMessage[]
   limit?: number
 }): Promise<SessionMessageLoadResult> {
-  const fallback = [...opts.fallback]
+  const fallback = opts.fallback
   const request = opts.client.messages
   if (!request) {
-    return { messages: fallback, status: "unavailable", source: "mirror", reason: "missing-client" }
+    return fallbackResult(fallback, "missing-client")
   }
 
   let raw: unknown
@@ -59,13 +74,13 @@ export async function loadSessionMessages(opts: {
       query: { directory: opts.directory, limit: opts.limit ?? SESSION_MESSAGE_LIMIT },
     })
   } catch {
-    return { messages: fallback, status: "unavailable", source: "mirror", reason: "request-failed" }
+    return fallbackResult(fallback, "request-failed")
   }
 
   const entries = responseEntries(raw)
   const messages = entries ? normalizeEntries(entries) : null
   if (!entries || !messages) {
-    return { messages: fallback, status: "unavailable", source: "mirror", reason: "malformed-response" }
+    return fallbackResult(fallback, "malformed-response")
   }
 
   const limit = opts.limit ?? SESSION_MESSAGE_LIMIT

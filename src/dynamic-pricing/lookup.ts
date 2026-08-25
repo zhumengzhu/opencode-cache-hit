@@ -66,7 +66,7 @@ function effectiveRule(
   if (!rules?.enabled) return undefined
   const explicit = rules.providers[providerID]?.models[modelID]
   if (explicit) return explicit
-  // Empty schedule → nothing to match; skip the built-in default (avoids a spurious ≈ marker).
+  // Empty schedule → nothing to match; skip the built-in default (avoids spuriously flagging costs as dynamic).
   if (rules.schedule.length > 0 && isDeepSeek(providerID, modelID)) {
     return DEEPSEEK_DEFAULT_RULE
   }

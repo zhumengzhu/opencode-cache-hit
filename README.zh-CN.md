@@ -31,7 +31,7 @@ OpenCode **TUI 侧边栏插件**：展示 prompt cache 命中率、token 用量�
 
 ## 功能一览
 
-- **命中率**：当前 provider/model lineage 的累计命中率 + **单轮**命中率与趋势（↑ / ↓ / `-`）
+- **命中率**：session 级累计命中率（可用时基于 DB 聚合）+ **单轮**命中率与趋势（↑ / ↓ / `-`）
 - **Token 明细**：缓存读 / 写 / 未命中 / 输出（对齐 visual-cache 的行布局）
 - **费用**：按消息使用对应模型单价；展示读取节省、写入溢价和缓存净值；支持多币种配置（`USD` / `CNY` / `EUR` / `GBP` / `JPY`）与**动态计价**（DeepSeek 高峰/空闲、`context_over_200k` 上下文分档）
 - **子 agent**：**Agents** 段仅汇总**子 session**（UI 有范围标注）；每行显示模型名 + session ID 后缀，**label 按厂商近似品牌色**，金额为灰色
@@ -137,11 +137,11 @@ OpenCode **TUI 侧边栏插件**：展示 prompt cache 命中率、token 用量�
 
 ### 模型 lineage 与指标历史
 
-主 Hit、Total Hit 和缓存 TTL 使用当前 provider/model lineage。费用、读取节省、写入溢价和缓存净值按每条消息的 provider/model 单价汇总。可折叠的 **Models** 段展示最近的 lineage。
+主 Hit、Total Hit 和费用在可用时使用 DB 级 session 聚合（`session.get`，不受消息源上限影响、数据完整），以当前 lineage 作为模型标识；缓存 TTL 跟随当前 lineage。读取节省、写入溢价和缓存净值按每条消息的 provider/model 单价汇总。可折叠的 **Models** 段分别展示各 lineage 分桶。
 
 插件会从交互指标中排除 `summary: true` 或 `agent: "compaction"` 的 assistant 消息。启用 `timeline.logSummaryMessages` 时，JSONL 仍保留这些行，并标记 `skippedForMetrics: true`。
 
-插件直接请求主 session 历史，最多 10,000 条消息。数据源达到上限或不可用时会回退到 TUI 实时镜像；该镜像最多包含最近 100 条消息。流式速度和 TTFT 使用实时镜像，因此可在调用过程中更新。如果某条消息没有匹配单价，费用行保留 OpenCode 的混合会话费用，不显示不完整的重算结果。
+插件直接请求主 session 历史，最多 10,000 条消息。当请求失败且镜像已满 100 条、或返回的历史达到 10,000 条上限时，面板会显示 `* history truncated`（历史可能不完整）提示。流式速度和 TTFT 使用实时镜像，因此可在调用过程中更新。如果某条消息没有匹配单价，费用行保留 OpenCode 的混合会话费用，不显示不完整的重算结果。
 
 ### 时间轴日志（`timeline`，默认关闭）
 
@@ -265,7 +265,7 @@ jq -r 'select(.rootSessionId=="YOUR_ROOT") | [.created,.scope,.hitPercent,.cost]
 - `levels`：各时段档的绝对单价，如 `{"peak": {"input": 0.44, "output": 0.88, "cacheRead": 0.01}, "offpeak": {"input": 0.22, ...}}`。缓存单价可写为扁平 `cacheRead`/`cacheWrite`（或 `cache_read`/`cache_write`），也可写为嵌套 `cache: {"read": …, "write": …}`（两种都接受；同时存在时扁平优先）。默认单位为 **USD/百万 token**（与 `state.provider` 一致）。想用其他币种写价时设 `"currency": "CNY"`：要么与展示币种 `cost.currency` 一致（按 `cost.rate` 换算），要么提供模型级 `"rate"`（USD → 该币种，如 EUR 填 1.08）。无法换算时（无 `rate` 且币种 ≠ 展示币种）向 stderr 告警并按 USD 处理。`multipliers` 是倍率，无币种概念。
 - `contextThreshold`：覆盖全局阈值的模型级配置（优先于 `state.provider` 的运行时档位阈值）。
 
-侧边栏单价会在时段边界自动切换（无需轮询）。单价行的 `peak`/`offpeak` 徽标**仅在该模型对当前时段档有定价时**显示（当前档存在于其显式 `levels`/`multipliers` 中，或内置 DeepSeek 默认生效）；纯静态价模型、以及未定价的档（如只配 peak 的模型在 offpeak 时刻）不标注。会话成本在动态规则生效时按每条消息的 provider/model、请求时刻和上下文档位重算（标注 `≈`）；否则使用 OpenCode 自身的 `msg.cost`。如果有消息缺少单价，则费用行保留 OpenCode 自身的混合 `msg.cost`，不显示不完整的重算结果。读取节省、写入溢价和缓存净值使用相同的逐消息单价。子 agent 行按其**会话创建时刻**（`session.list`）做时段计价（任一子会话被重算时 Agents 合计标注 `≈`）。
+侧边栏单价会在时段边界自动切换（无需轮询）。单价行的 `peak`/`offpeak` 徽标**仅在该模型对当前时段档有定价时**显示（当前档存在于其显式 `levels`/`multipliers` 中，或内置 DeepSeek 默认生效）；纯静态价模型、以及未定价的档（如只配 peak 的模型在 offpeak 时刻）不标注。会话成本在动态规则生效时按每条消息的 provider/model、请求时刻和上下文档位重算；否则使用 OpenCode 自身的 `msg.cost`。如果有消息缺少单价，则费用行保留 OpenCode 自身的混合 `msg.cost`，不显示不完整的重算结果。读取节省、写入溢价和缓存净值使用相同的逐消息单价。子 agent 行按其**会话创建时刻**（`session.list`）做时段计价。
 
 > [!NOTE]
 > **迁移提示（星期感知 schedule）**。schedule 现支持可选 `days` 字段（ISO 星期，1=周一 … 7=周日；省略 = 每天）与「**回退档**」（`windows` 为空的 level）。DeepSeek 官方高峰为**周一至周五**北京时间 09:00-12:00 / 14:00-18:00，周末为空闲。内置默认 schedule 已是星期感知写法，上方示例亦然；**未写 `days` 的旧配置保持原语义——周末仍按高峰计费**。要修复，请为 `peak` 窗口补 `"days": [1,2,3,4,5]`（或改用含 `offpeak` 回退档的新默认 schedule）。若你解析 DeepSeek 模型时配置的 schedule 存在窗口级档但均未写 `days`，插件会向 stderr 输出一次性提示。
