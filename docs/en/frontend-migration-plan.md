@@ -1,5 +1,7 @@
 # Frontend Migration: session.get() Aggregates
 
+> **Historical status:** The `session.get()` migration described here is no longer the primary source for main-session interactive metrics. The cache-lineage implementation now requests direct main-session messages with `limit: 10000`, filters summary and compaction calls, and uses `session.get()` as a fallback for snapshot and child-session data. See [design.md](./design.md).
+
 ## Overview
 
 Cache-hit previously derived all cost/token statistics by iterating `api.state.session.messages()` and summing per-message fields. This path is capped at **100 messages** by the OpenCode TUI sync layer ([issue #31513]), silently truncating sessions with >100 messages.

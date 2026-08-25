@@ -66,6 +66,18 @@ describe("aggregateSessionFromMessages", () => {
     expect(snap.cost).toBe(0.005)
     expect(snap.cacheRead).toBe(500)
   })
+
+  test("excludes summary and compaction messages from totals", () => {
+    const snap = aggregateSessionFromMessages([
+      { role: "assistant", summary: true, tokens: { input: 100, output: 10, cache: { read: 90 } }, cost: 1 },
+      { role: "assistant", agent: "compaction", tokens: { input: 200, output: 20, cache: { read: 180 } }, cost: 2 },
+      { role: "assistant", modelID: "gpt-5.6", tokens: { input: 10, output: 5, cache: { read: 90 } }, cost: 0.1 },
+    ])
+    expect(snap.input).toBe(10)
+    expect(snap.output).toBe(5)
+    expect(snap.cacheRead).toBe(90)
+    expect(snap.cost).toBe(0.1)
+  })
 })
 
 describe("cacheHitRatio", () => {
@@ -98,6 +110,7 @@ describe("perMessageHitPercent", () => {
   test("null for summary or empty denom", () => {
     expect(perMessageHitPercent({ role: "assistant", summary: true })).toBeNull()
     expect(perMessageHitPercent({ role: "assistant", tokens: { input: 0 } })).toBeNull()
+    expect(perMessageHitPercent({ role: "assistant", agent: "compaction", tokens: { input: 10, cache: { read: 90 } } })).toBeNull()
   })
 
   test("matches ratio", () => {
@@ -119,6 +132,29 @@ describe("computePerCallHitTrend", () => {
     expect(r.hitPercent).toBeCloseTo(90, 5)
     expect(r.trendPercent).toBeCloseTo(90, 5)
     expect(r.hasTrend).toBe(true)
+    expect(r.state).toBe("steady")
+  })
+
+  test("does not compare different model lineages", () => {
+    const r = computePerCallHitTrend([
+      { role: "assistant", providerID: "openai", modelID: "gpt-sol", tokens: { input: 100, cache: { read: 0 } } },
+      { role: "assistant", providerID: "openai", modelID: "gpt-luna", tokens: { input: 10, cache: { read: 90 } } },
+    ])
+    expect(r.hitPercent).toBeCloseTo(90, 5)
+    expect(r.trendPercent).toBe(0)
+    expect(r.hasTrend).toBe(false)
+    expect(r.state).toBe("switch")
+  })
+
+  test("shows a trend after two calls on the new lineage", () => {
+    const r = computePerCallHitTrend([
+      { role: "assistant", providerID: "openai", modelID: "gpt-sol", tokens: { input: 100, cache: { read: 0 } } },
+      { role: "assistant", providerID: "openai", modelID: "gpt-luna", tokens: { input: 10, cache: { read: 90 } } },
+      { role: "assistant", providerID: "openai", modelID: "gpt-luna", tokens: { input: 50, cache: { read: 50 } } },
+    ])
+    expect(r.trendPercent).toBeCloseTo(-40, 5)
+    expect(r.hasTrend).toBe(true)
+    expect(r.state).toBe("steady")
   })
 })
 

@@ -257,6 +257,21 @@ describe("createTimelineCollector (event-driven)", () => {
     expect(appended).toHaveLength(1)
   })
 
+  test("keeps compaction rows with an explicit metrics skip marker", async () => {
+    const appended: LlmCallRecord[] = []
+    const c = collector({
+      config: { ...DEFAULT_TIMELINE, enabled: true, logSummaryMessages: true },
+      getRootSessionId: () => "r",
+      getChildIds: () => [],
+      append: async (_p, rec) => appended.push(rec),
+    })
+    c.handleMessage("r", msg({ id: "compact", agent: "compaction" }))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(appended).toHaveLength(1)
+    expect(appended[0].skippedForMetrics).toBe(true)
+    expect(appended[0].hitPercent).toBeNull()
+  })
+
   test("sets scope to main for root session messages", async () => {
     const appended: LlmCallRecord[] = []
     const c = collector({

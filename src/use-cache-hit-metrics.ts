@@ -11,15 +11,19 @@ import { computeHitBarWidth, visualWidth } from "./tui-panel/layout.ts"
 import { buildPanelPalette, type PanelPalette } from "./tui-panel/palette.ts"
 import type { PanelLayout } from "./tui-panel/use-panel-layout.ts"
 import type { AssistantMessage, ProviderInfo, SessionSnapshot, SubAgentSummary } from "./types.ts"
+import type { SessionMessageLoadStatus } from "./session-messages.ts"
 import {
+  aggregateSessionFromMessages,
   cacheHitRatio,
   computePerCallHitTrend,
   emptySessionSnapshot,
+  isInteractiveAssistantMessage,
   mainSessionHasStats,
   shortModelName,
 } from "./stats.ts"
-import { computePricing, computeSubsSaved, type PricingInfo } from "./pricing.ts"
-import { recomputeSessionCost, recomputeSubAgentCost } from "./dynamic-pricing/recompute.ts"
+import { activeLineageKey, aggregateLineages, recentLineages } from "./lineage-stats.ts"
+import { computePricing, computeSessionPricing, computeSubsSaved, type PricingInfo } from "./pricing.ts"
+import { recomputeSubAgentCost } from "./dynamic-pricing/recompute.ts"
 import { nextBoundaryMs } from "./dynamic-pricing/schedule.ts"
 import {
   computeAvgTokenTpotMs,
@@ -48,6 +52,8 @@ export function useCacheHitMetrics(props: {
   theme: Accessor<Record<string, unknown>>
   display: DisplayConfig
   messages: Accessor<AssistantMessage[]>
+  metricMessages?: Accessor<AssistantMessage[]>
+  metricMessageStatus?: Accessor<SessionMessageLoadStatus>
   main: Accessor<SessionSnapshot>
   subAgents: Accessor<SubAgentSummary[]>
   providers: Accessor<ReadonlyArray<ProviderInfo>>
@@ -59,8 +65,27 @@ export function useCacheHitMetrics(props: {
   const t = createMemo(() => getUiStrings(activeLang(props.display)))
   const hitLabel = createMemo(() => props.display.mainHitLabel ?? t().hit)
   const subs = createMemo(() => props.subAgents())
-  const main = createMemo(() => props.main() ?? emptySessionSnapshot())
-  const perCall = createMemo(() => computePerCallHitTrend(props.messages()))
+  const metricInput = () => props.metricMessages?.() ?? props.messages()
+  const lineages = createMemo(() => aggregateLineages(metricInput()))
+  const activeKey = createMemo(() => activeLineageKey(metricInput()))
+  const activeLineage = createMemo(() => lineages().find((lineage) => lineage.key === activeKey()))
+  const blendedMain = createMemo(() => aggregateSessionFromMessages(metricInput()))
+  const main = createMemo<SessionSnapshot>(() => {
+    const active = activeLineage()
+    if (!active) return aggregateSessionFromMessages(metricInput())
+    return {
+      lineageKey: active.key,
+      model: active.modelID,
+      providerID: active.providerID,
+      input: active.input,
+      output: active.output,
+      reasoning: active.reasoning,
+      cacheRead: active.cacheRead,
+      cacheWrite: active.cacheWrite,
+      cost: active.cost,
+    }
+  })
+  const perCall = createMemo(() => computePerCallHitTrend(metricInput()))
   const sessionRatio = createMemo(() => cacheHitRatio(main().cacheRead, main().input))
 
   // Dynamic pricing: precise refresh at schedule boundaries (no polling).
@@ -91,6 +116,9 @@ export function useCacheHitMetrics(props: {
       rules: props.dynamicPricing,
     }),
   )
+  const sessionPricing = createMemo(() =>
+    computeSessionPricing(metricInput(), props.providers(), props.dynamicPricing),
+  )
 
   // Sub-agent cache savings: level by current time-of-day + each child's total input (input + cacheRead).
   const subsSaved = createMemo(() =>
@@ -98,11 +126,6 @@ export function useCacheHitMetrics(props: {
       now: now(),
       rules: props.dynamicPricing,
     }),
-  )
-
-  // Dynamic cost recompute (per-message request time + context tier); unpriced → null.
-  const recomputedCost = createMemo(() =>
-    recomputeSessionCost(props.messages(), props.providers(), props.dynamicPricing),
   )
 
   // Sub-agent dynamic cost (session creation time + aggregate tokens); no created / unpriced → null.
@@ -115,26 +138,30 @@ export function useCacheHitMetrics(props: {
   })
 
   const mainHasStats = createMemo(() => mainSessionHasStats(main()))
-  const hasData = createMemo(() => mainHasStats() || subs().length > 0)
+  const hasData = createMemo(() => lineages().length > 0 || subs().length > 0)
 
-  const trendLabel = createMemo(() =>
-    perCall().hasTrend ? formatTrendLabel(perCall().trendPercent) : "",
-  )
+  const trendLabel = createMemo(() => {
+    if (perCall().state === "switch") return t().switchState
+    if (perCall().state === "warming") return t().warmingState
+    return perCall().hasTrend ? formatTrendLabel(perCall().trendPercent) : ""
+  })
   const bar = createMemo(() =>
     formatHitBar(
       perCall().hitPercent / 100,
-      computeHitBarWidth(hitLabel(), props.layout.gauge(), trendLabel(), perCall().hasTrend),
+      computeHitBarWidth(hitLabel(), props.layout.gauge(), trendLabel(), trendLabel().length > 0),
     ),
   )
   const hitColor = createMemo(() => hitRateColor(perCall().hitPercent, pal()))
   const trendFg = createMemo(() => {
+    if (perCall().state === "switch") return pal().warning
+    if (perCall().state === "warming") return pal().muted
     const tr = perCall().trendPercent
     if (Math.abs(tr) < 0.05) return pal().text
     return tr > 0 ? pal().success : pal().error
   })
 
   const collapsedHitSummary = createMemo(() => {
-    const right = perCall().hasTrend
+    const right = trendLabel()
       ? `${formatPercentOneDecimal(perCall().hitPercent)} ${t().hitFolded} ${trendLabel()}`
       : `${formatPercentOneDecimal(perCall().hitPercent)} ${t().hitFolded}`
     return { text: right, width: visualWidth(right) }
@@ -146,7 +173,7 @@ export function useCacheHitMetrics(props: {
     const msgs = props.messages()
     const firstPartTime = props.firstPartTime()
     for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].summary) continue
+      if (!isInteractiveAssistantMessage(msgs[i])) continue
       const timing = timingFromAssistantMessage(msgs[i])
       if (!timing?.isComplete) continue
       const output = msgs[i].tokens?.output ?? 0
@@ -176,7 +203,7 @@ export function useCacheHitMetrics(props: {
     const msgs = props.messages()
     const firstPartTime = props.firstPartTime()
     const records = msgs
-      .filter((msg) => msg.role === "assistant" && !msg.summary && msg.time?.completed)
+      .filter((msg) => isInteractiveAssistantMessage(msg) && msg.time?.completed)
       .map((msg) => {
         const timing = timingFromAssistantMessage(msg)
         const msgID = msg.id ?? msg.messageID
@@ -203,7 +230,7 @@ export function useCacheHitMetrics(props: {
   const lastTtft = createMemo(() => {
     const msgs = props.messages()
     for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].summary) continue
+      if (!isInteractiveAssistantMessage(msgs[i])) continue
       const msgID = msgs[i].id ?? msgs[i].messageID
       if (!msgID) continue
       const firstTime = props.firstPartTime().get(msgID)
@@ -229,9 +256,17 @@ export function useCacheHitMetrics(props: {
     hitLabel,
     subs,
     main,
+    blendedMain,
+    lineages,
+    activeLineage,
+    activeLineageKey: activeKey,
+    metricMessages: metricInput,
+    recentLineages: createMemo(() => recentLineages(lineages())),
+    metricMessageStatus: () => props.metricMessageStatus?.() ?? "complete",
     mainHasStats,
     perCall,
     pricing,
+    sessionPricing,
     sessionPct: createMemo(() => formatRatioAsPercent(sessionRatio())),
 
     hasData,
@@ -242,7 +277,6 @@ export function useCacheHitMetrics(props: {
     pctLabel: createMemo(() => formatPercentOneDecimal(perCall().hitPercent)),
     modelShort: createMemo(() => shortModelName(main().model)),
     totalSubCost: createMemo(() => subs().reduce((s, a) => s + a.cost, 0)),
-    recomputedCost,
     subAgentDynamicCosts,
     subsSaved,
     collapsedHitSummary,

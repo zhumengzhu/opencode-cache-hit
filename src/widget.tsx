@@ -2,6 +2,7 @@
 import { createMemo, createSignal, Show, type Accessor } from "solid-js"
 import type { DisplayConfig, CacheTTLConfig, DynamicPricingConfig } from "./plugin-config.ts"
 import type { AssistantMessage, ProviderInfo, SessionSnapshot, SubAgentSummary } from "./types.ts"
+import type { SessionMessageLoadStatus } from "./session-messages.ts"
 import type { StreamingPhase } from "./streaming-state.ts"
 import { PLUGIN_VERSION } from "./version.ts"
 import { AgentsView } from "./agents-view.tsx"
@@ -28,6 +29,8 @@ export function CacheHitSidebar(props: {
   cacheTTL: CacheTTLConfig
   dynamicPricing: DynamicPricingConfig
   messages: Accessor<AssistantMessage[]>
+  metricMessages?: Accessor<AssistantMessage[]>
+  metricMessageStatus?: Accessor<SessionMessageLoadStatus>
   main: Accessor<SessionSnapshot>
   subAgents: Accessor<SubAgentSummary[]>
   providers: Accessor<ReadonlyArray<ProviderInfo>>
@@ -40,6 +43,7 @@ export function CacheHitSidebar(props: {
   const detail = createSectionFold(true)
   const speed = createSectionFold(true)
   const model = createSectionFold(true)
+  const lineages = createSectionFold(true)
   const agents = createSectionFold(true)
 
   const borderOn = () => props.display.panelBorder
@@ -49,6 +53,8 @@ export function CacheHitSidebar(props: {
     theme: () => props.theme,
     display: props.display,
     messages: props.messages,
+    metricMessages: props.metricMessages ?? props.messages,
+    metricMessageStatus: props.metricMessageStatus,
     main: props.main,
     subAgents: props.subAgents,
     providers: props.providers,
@@ -115,6 +121,7 @@ export function CacheHitSidebar(props: {
               detail={detail}
               speed={speed}
               model={model}
+              lineages={lineages}
               showSpeed={props.display.showSpeed}
               streamingNow={props.streamingNow}
               formatCost={props.formatCost}

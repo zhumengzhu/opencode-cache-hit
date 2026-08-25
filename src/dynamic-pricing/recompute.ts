@@ -1,4 +1,5 @@
 import type { AssistantMessage, ProviderInfo, SubAgentSummary } from "../types.ts"
+import { isInteractiveAssistantMessage } from "../stats.ts"
 import { billingCost } from "./context.ts"
 import { resolveModelCost } from "./lookup.ts"
 import type { DynamicPricingConfig } from "./types.ts"
@@ -31,6 +32,7 @@ export function recomputeSessionCost(
   let counted = 0
   let dynamic = false
   for (const msg of messages) {
+    if (!isInteractiveAssistantMessage(msg)) continue
     const tokens = msg.tokens
     if (!tokens) continue
     const input = tokens.input ?? 0

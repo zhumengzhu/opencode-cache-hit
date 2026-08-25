@@ -30,6 +30,7 @@ const sample: LlmCallRecord = {
   cost: 0.01,
   hitPercent: 83.33,
   skippedForHit: false,
+  skippedForMetrics: false,
 }
 
 describe("timeline writer", () => {

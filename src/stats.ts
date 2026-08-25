@@ -39,7 +39,7 @@ export function aggregateSessionFromMessages(messages: readonly AssistantMessage
     cacheWrite = 0,
     cost = 0
   for (const msg of messages) {
-    if (msg.role !== "assistant") continue
+    if (msg.role !== "assistant" || !isInteractiveAssistantMessage(msg)) continue
     const t = msg.tokens ?? {}
     input += t.input ?? 0
     output += t.output ?? 0
@@ -139,11 +139,33 @@ export type PerCallHitTrend = {
   hitPercent: number
   trendPercent: number
   hasTrend: boolean
+  state: "steady" | "switch" | "warming"
+}
+
+export const UNKNOWN_LINEAGE_KEY = "unknown"
+
+/** Assistant turns that represent an interactive, billable model call. */
+export function isInteractiveAssistantMessage(msg: AssistantMessage): boolean {
+  return msg.summary !== true && msg.agent !== "compaction"
+}
+
+export function messageLineageKey(msg: AssistantMessage): string {
+  return msg.providerID && msg.modelID ? `${msg.providerID}:${msg.modelID}` : UNKNOWN_LINEAGE_KEY
+}
+
+export function compareAssistantMessages(a: AssistantMessage, b: AssistantMessage): number {
+  const aCompleted = a.time?.completed ?? -Infinity
+  const bCompleted = b.time?.completed ?? -Infinity
+  if (aCompleted !== bCompleted) return aCompleted - bCompleted
+  const aCreated = a.time?.created ?? -Infinity
+  const bCreated = b.time?.created ?? -Infinity
+  if (aCreated !== bCreated) return aCreated - bCreated
+  return (a.id ?? a.messageID ?? "").localeCompare(b.id ?? b.messageID ?? "")
 }
 
 /** Single assistant turn hit % (0–100), or null if skipped / no denominator. */
 export function perMessageHitPercent(msg: AssistantMessage): number | null {
-  if (msg.role !== "assistant" || msg.summary === true) return null
+  if (msg.role !== "assistant" || !isInteractiveAssistantMessage(msg)) return null
   const t = msg.tokens
   if (!t) return null
   const input = t.input ?? 0
@@ -155,21 +177,31 @@ export function perMessageHitPercent(msg: AssistantMessage): number | null {
 
 /**
  * Per-turn hit rates for the top Hit row (visual-cache).
- * Skips `summary: true` assistant messages — not full LLM pricing turns.
+ * Skips summary and compaction assistant messages — not full LLM pricing turns.
  */
 export function computePerCallHitTrend(messages: readonly AssistantMessage[]): PerCallHitTrend {
-  let prevHit = -1
-  let lastHit = -1
-  for (const msg of messages) {
-    const hit = perMessageHitPercent(msg)
-    if (hit === null) continue
-    prevHit = lastHit
-    lastHit = hit
+  const calls = messages
+    .filter((msg) => msg.role === "assistant" && isInteractiveAssistantMessage(msg))
+    .slice()
+    .sort(compareAssistantMessages)
+    .map((msg) => ({
+      msg,
+      hit: perMessageHitPercent(msg),
+    }))
+    .filter((call) => call.hit !== null)
+  const last = calls[calls.length - 1]
+  if (!last) {
+    return { hitPercent: 0, trendPercent: 0, hasTrend: false, state: "warming" }
   }
+  const previous = calls[calls.length - 2]
+  const hit = last.hit ?? 0
+  const switched = Boolean(previous && messageLineageKey(last.msg) !== messageLineageKey(previous.msg))
+  const state = !previous ? "warming" : switched ? "switch" : "steady"
   return {
-    hitPercent: lastHit >= 0 ? lastHit : 0,
-    trendPercent: prevHit >= 0 && lastHit >= 0 ? lastHit - prevHit : 0,
-    hasTrend: prevHit >= 0 && lastHit >= 0,
+    hitPercent: hit,
+    trendPercent: previous && !switched ? hit - (previous.hit ?? 0) : 0,
+    hasTrend: Boolean(previous && !switched),
+    state,
   }
 }
 

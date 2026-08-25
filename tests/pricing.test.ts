@@ -3,6 +3,7 @@ import {
   lookupModelCost,
   computePricing,
   computeSubsSaved,
+  computeSessionPricing,
   EMPTY_PRICING,
 } from "../src/pricing.ts"
 import type { ProviderInfo, SubAgentSummary } from "../src/types.ts"
@@ -133,5 +134,62 @@ describe("computeSubsSaved", () => {
     ]
     const result = computeSubsSaved(subs, MOCK_PROVIDERS)
     expect(result).toBeCloseTo(2.7, 10)
+  })
+})
+
+describe("computeSessionPricing", () => {
+  test("uses each message model and reports net cache value", () => {
+    const result = computeSessionPricing([
+      {
+        role: "assistant",
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4-20250514",
+        tokens: { input: 1_000_000, cache: { read: 1_000_000, write: 1_000_000 } },
+      },
+      {
+        role: "assistant",
+        providerID: "openai",
+        modelID: "gpt-4o",
+        tokens: { input: 1_000_000, cache: { read: 1_000_000 } },
+      },
+    ], MOCK_PROVIDERS)
+    expect(result.counted).toBe(2)
+    expect(result.readSavings).toBeCloseTo(5.2, 10)
+    expect(result.writePremium).toBeCloseTo(0.75, 10)
+    expect(result.netCacheValue).toBeCloseTo(4.45, 10)
+  })
+
+  test("can report a negative cache value when writes exceed read savings", () => {
+    const result = computeSessionPricing([
+      {
+        role: "assistant",
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4-20250514",
+        tokens: { cache: { write: 1_000_000 } },
+      },
+    ], MOCK_PROVIDERS)
+    expect(result.netCacheValue).toBeCloseTo(-0.75, 10)
+  })
+
+  test("excludes compaction messages", () => {
+    const result = computeSessionPricing([
+      { role: "assistant", agent: "compaction", providerID: "anthropic", modelID: "claude-sonnet-4-20250514", tokens: { input: 1_000_000 } },
+    ], MOCK_PROVIDERS)
+    expect(result.counted).toBe(0)
+    expect(result.cost).toBe(0)
+  })
+
+  test("reports messages with missing rates as unpriced", () => {
+    const result = computeSessionPricing([
+      {
+        role: "assistant",
+        providerID: "missing",
+        modelID: "unknown",
+        cost: 1,
+        tokens: { input: 1_000_000 },
+      },
+    ], MOCK_PROVIDERS)
+    expect(result.counted).toBe(0)
+    expect(result.unpriced).toBe(1)
   })
 })
