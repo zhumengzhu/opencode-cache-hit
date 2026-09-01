@@ -155,7 +155,10 @@ export function useCacheHitMetrics(props: {
   })
 
   const mainHasStats = createMemo(() => mainSessionHasStats(main()))
-  const hasData = createMemo(() => lineages().length > 0 || subs().length > 0)
+  // Session aggregates are authoritative and may be available before the separate
+  // history request completes or when that request fails. Do not hide valid cache
+  // metrics merely because per-turn history is unavailable.
+  const hasData = createMemo(() => mainSessionHasStats(main()) || lineages().length > 0 || subs().length > 0)
   // No interactive messages in the main session: show an empty Hit row, not "0.0% warming".
   const noMainData = createMemo(() => lineages().length === 0)
 
