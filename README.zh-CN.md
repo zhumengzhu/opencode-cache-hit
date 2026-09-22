@@ -81,6 +81,19 @@ OpenCode **TUI 侧边栏插件**：展示 prompt cache 命中率、token 用量�
 
 本地开发：将 npm 名称替换为 checkout 的绝对路径，例如 `"/path/to/opencode-cache-hit"`。OpenCode 会加载包根目录及其 `index.tsx` 入口。
 
+### OpenCode 2
+
+同一个包同时支持 OpenCode 1 和 2，无需换包名。V2 不再读取 `tui.json`：把插件写进 `opencode.json` 的 `plugins`（或 CLI 专用的 `cli.json`）即可，CLI 会自动加载其中的 TUI 部分。`cache-hit.json` 配置、侧边栏和 JSONL timeline 行为完全一致。
+
+```jsonc
+// ~/.config/opencode/opencode.json
+{
+  "plugins": ["opencode-cache-hit@latest"]
+}
+```
+
+迁移到 V2 的注意事项（插件 API、server API、`tui.json` → `cli.json`）见 [V2 迁移指南](https://opencode.ai/v2/docs/migrate-v1)。
+
 复制 `cache-hit.config.example.json` → `~/.config/opencode/cache-hit.json`（推荐）或放在插件根目录旁。更改插件代码或配置后**重启 OpenCode**。
 
 | 安装方式 | 更新后 |

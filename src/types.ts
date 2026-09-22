@@ -154,6 +154,10 @@ export type OpenCodeTuiApi = {
       fn: (event: { properties?: Record<string, unknown> }) => void,
     ) => () => void
   }
+}
+
+/** V1-only surface: OpenCode 2 registers slots through `setup(ctx)`, not the api. */
+export type V1TuiApi = OpenCodeTuiApi & {
   slots: {
     register: (opts: {
       order: number

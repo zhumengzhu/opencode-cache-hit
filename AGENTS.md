@@ -63,7 +63,10 @@ After moving or renaming exports: run full `bun test`; `tests/module-load.test.t
 ## OpenCode integration
 
 - Entry: [index.tsx](index.tsx) → [src/plugin.tsx](src/plugin.tsx), built to `dist/tui.js` for `exports["./tui"]`.
-- Slot: `sidebar_content`, `order: 56` (near visual-cache).
+- Dual entrypoint: that module default-exports `{ id, tui, setup }`. V1's TUI loader takes `tui(api)`, V2's CLI loader takes `setup(ctx)`. Never add `server` (V1 rejects `server`+`tui` together) and never runtime-import `@opencode/plugin` — V1 does not substitute that specifier, so the bundle must stay free of it.
+- V2 adapter: [src/v2/adapter.ts](src/v2/adapter.ts) maps the V2 context onto `OpenCodeTuiApi`, so stats/pricing/timeline/rendering stay shared by both versions. Pure mapping lives in [src/v2/map.ts](src/v2/map.ts); the V2 surface is hand-written in [src/v2/types.ts](src/v2/types.ts) (no `@opencode/plugin` dependency).
+- `exports["."]` is the V2 server entry ([src/v2/server.ts](src/v2/server.ts)): a no-op that keeps the package loadable from `opencode.json`, so V2 reports `features.tui` and the CLI mounts the sidebar. V1 never resolves it (it reads `./server` or `main`; neither exists).
+- Slots: V1 `sidebar_content` (order 56), V2 `sidebar.content`.
 - Peers: `@opencode-ai/plugin`, `@opencode-ai/sdk`, `@opentui/solid`, `solid-js` (see [package.json](package.json)).
 
 ## Git / safety
