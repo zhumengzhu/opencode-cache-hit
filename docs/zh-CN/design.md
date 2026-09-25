@@ -201,9 +201,11 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  M{OpenCode 是否挂载侧边栏?<br/>终端宽于 120 列 / 已手动打开}
-  M -->|否| NC[slot 从不被调用]
-  M -->|是| S{sessionId 非空?}
+  M{是否子 session?<br/>session.parentID 存在}
+  M -->|是| NC[slot 从不被调用]
+  M -->|否| V{是否可见?<br/>已手动打开，或宽于 120 列<br/>且状态为 auto}
+  V -->|否| NC
+  V -->|是| S{sessionId 非空?}
   S -->|否| H[不渲染面板]
   S -->|是| P[渲染 TuiPanel]
   P --> D{hasData?<br/>主或子有统计}
@@ -214,7 +216,7 @@ flowchart TD
 
 | 概念 | 实现 |
 |------|------|
-| 侧边栏**是否挂载** | 不归本插件管：OpenCode 仅在终端宽于 120 列、或用户手动打开时才渲染侧边栏；低于此宽度本插件的 slot 从不被调用（见 README「兼容性」） |
+| 侧边栏**是否挂载** | 不归本插件管：只有会话无 `parentID`，且「用户手动打开」或「终端宽于 120 列且持久化状态为 `auto`（非 `hide`）」时 OpenCode 才渲染侧边栏；否则本插件 slot 从不被调用（见 README「兼容性」） |
 | 整个面板 | `widget.tsx`：`Show when={sessionId().length > 0}` |
 | 有无可显示数据 | `hasData` = `lineages.length > 0 \|\| subs.length > 0` |
 | 主 session **区块** | 始终渲染（Hit / Detail / Model） |
