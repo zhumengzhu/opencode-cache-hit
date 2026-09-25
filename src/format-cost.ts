@@ -153,10 +153,14 @@ export function createCostFormatter(config: CostDisplayConfig): (amountUsd: numb
   const rate = unit === config.currency ? 1 : resolveExchangeRate(config)
 
   return (amount: number) => {
-    if (amount <= 0) return ""
-    const v = amount * rate
-    if (v < minDisplay) return `<${symbol}${minDisplay}`
-    return "~" + symbol + v.toFixed(decimals)
+    // 0 renders as "" (compact panel convention: nothing to show) and non-finite input is
+    // dropped, but a negative amount must stay visible — net cache value can be negative.
+    if (amount === 0 || !Number.isFinite(amount)) return ""
+    const negative = amount < 0
+    const v = Math.abs(amount) * rate
+    if (v < minDisplay) return (negative ? "-" : "") + `<${symbol}${minDisplay}`
+    // "~" marks USD→display conversion; a negative value uses that slot for its sign.
+    return (negative ? "-" : "~") + symbol + v.toFixed(decimals)
   }
 }
 

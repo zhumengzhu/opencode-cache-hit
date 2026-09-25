@@ -15,6 +15,18 @@ describe("createCostFormatter", () => {
     expect(createCostFormatter({ currency: "CNY", costUnit: "USD", rate: 7.2 })(0)).toBe("")
   })
 
+  test("negative stays visible", () => {
+    const fmt = createCostFormatter(DEFAULT_COST_DISPLAY)
+    expect(fmt(-0.75)).toBe("-¥5.077")
+    expect(fmt(-0.0001)).toBe("-<¥0.01")
+  })
+
+  test("non-finite returns empty", () => {
+    const fmt = createCostFormatter(DEFAULT_COST_DISPLAY)
+    expect(fmt(Number.NaN)).toBe("")
+    expect(fmt(Number.NEGATIVE_INFINITY)).toBe("")
+  })
+
   test("USD cost to CNY display", () => {
     const fmt = createCostFormatter(DEFAULT_COST_DISPLAY)
     expect(fmt(0.1)).toBe("~¥0.677")
