@@ -12,7 +12,7 @@
  */
 
 import { spawnSync } from "child_process"
-import { existsSync, readFileSync, readdirSync } from "fs"
+import { existsSync, readFileSync, readdirSync, statSync } from "fs"
 import { homedir } from "os"
 import { basename, dirname, resolve } from "path"
 import { Glob } from "bun"
@@ -121,11 +121,21 @@ function isTimelineLogFile(name: string): boolean {
   return name.startsWith("timeline-") && /\.jsonl(\.\d+)?$/.test(name)
 }
 
-async function expandPattern(pattern: string): Promise<string[]> {
+/**
+ * Does this path use glob syntax? Written with `includes` on purpose: a character class
+ * such as `[?*[]` closes at the `[`, so `/[?*[]]/` silently also demands a literal `]`
+ * and every real glob fell through to the literal-path branch.
+ */
+function hasGlobMeta(p: string): boolean {
+  return p.includes("*") || p.includes("?") || p.includes("[")
+}
+
+export async function expandPattern(pattern: string): Promise<string[]> {
   const p = expandUserPath(pattern)
-  if (!/[?*[]]/.test(p)) {
+  if (!hasGlobMeta(p)) {
     const abs = resolve(p)
-    return existsSync(abs) ? [abs] : []
+    // A directory passes `existsSync` but `Bun.file().text()` rejects with a raw stack trace.
+    return existsSync(abs) && statSync(abs).isFile() ? [abs] : []
   }
   const dir = resolve(dirname(p))
   const base = basename(p)
@@ -176,7 +186,7 @@ function sortKey(r: LlmCallRecord): number {
   return new Date(ts).getTime() || 0
 }
 
-async function loadRecords(paths: string[]): Promise<LlmCallRecord[]> {
+export async function loadRecords(paths: string[]): Promise<LlmCallRecord[]> {
   const records: LlmCallRecord[] = []
   const indexByKey = new Map<string, number>()
   let skippedInvalid = 0
@@ -244,7 +254,7 @@ function genHTML(data: LlmCallRecord[], cost: CostDisplayEmbed): string {
   const jsonCost = embedJson(JSON.stringify(cost))
 
   const parts = `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -456,9 +466,10 @@ function hitValues(rows) {
 }
 
 /* Charts plot on a created-time x axis, so order points by created (records are globally
-   sorted by completion time; concurrent child sessions can interleave the two). */
+   sorted by completion time; concurrent child sessions can interleave the two). Parsed,
+   not string-compared: the ISO strings carry a local offset. */
 function byCreated(data) {
-  return data.slice().sort(function(a, b){ return String(a.created).localeCompare(String(b.created)) })
+  return data.slice().sort(function(a, b){ return (Date.parse(a.created) || 0) - (Date.parse(b.created) || 0) })
 }
 
 function sessionScopeLabel(rows) {
@@ -671,7 +682,7 @@ function renderSessionTable(data) {
       start:rd.map(function(r){return r.created}).sort()[0]||""
     })
   })
-  rows.sort(function(a,b){return a.start.localeCompare(b.start)})
+  rows.sort(function(a,b){return (Date.parse(a.start)||0) - (Date.parse(b.start)||0)})
   var cls = function(p){return p>90?"ok":p>70?"warn":"err"}
   document.getElementById("sessionBody").innerHTML = rows.map(function(r){
     return '<tr><td style="max-width:180px;overflow:hidden;text-overflow:ellipsis" title="'+esc(r.id)+'">'+esc(shortSession(r.id))+
@@ -707,9 +718,9 @@ function expandDetailGrid(r) {
 
 /* Per-call sorting: a header click re-sorts, and the table shows the first N rows in that order. */
 var DETAIL_SORT = { key: "created", dir: -1 }
-var DETAIL_TEXT_KEYS = { created:1, scope:1, session:1, model:1 }
+var DETAIL_TEXT_KEYS = { scope:1, session:1, model:1 }
 var DETAIL_SORT_VALUE = {
-  created: function(r){ return r.created },
+  created: function(r){ return Date.parse(r.created) || 0 },
   scope: function(r){ return r.scope || "" },
   session: function(r){ return r.rootSessionId || "" },
   model: function(r){ return r.modelId || "" },
@@ -876,77 +887,84 @@ function openInBrowser(filePath: string): void {
   else spawnSync("xdg-open", [filePath], { stdio: "ignore" })
 }
 
-const { patterns, output, open } = parseArgs(process.argv.slice(2))
-const paths = await resolveInputPaths(patterns)
-if (paths.length === 0) {
-  console.error(
-    "No timeline JSONL files found.\n" +
-      "Pass paths/globs or ensure ~/.local/share/opencode/logs/cache-hit/ exists.",
-  )
-  process.exit(1)
-}
+/** CLI entry point. Everything above it is import-safe — see tests/timeline-dashboard-loader.test.ts. */
+export async function main(argv: string[]): Promise<void> {
+  const { patterns, output, open } = parseArgs(argv)
+  const paths = await resolveInputPaths(patterns)
+  if (paths.length === 0) {
+    console.error(
+      "No timeline JSONL files found.\n" +
+        "Pass paths/globs or ensure ~/.local/share/opencode/logs/cache-hit/ exists.",
+    )
+    process.exit(1)
+  }
 
-console.error("Reading " + paths.length + " file(s):")
-for (const p of paths) {
-  const stats = await Bun.file(p).stat()
-  console.error("  " + p + " (" + (stats.size / 1024).toFixed(1) + " KB)")
-}
+  console.error("Reading " + paths.length + " file(s):")
+  for (const p of paths) {
+    const stats = await Bun.file(p).stat()
+    console.error("  " + p + " (" + (stats.size / 1024).toFixed(1) + " KB)")
+  }
 
-const records = await loadRecords(paths)
-if (records.length === 0) {
-  console.error("No valid records found.")
-  process.exit(1)
-}
+  const records = await loadRecords(paths)
+  if (records.length === 0) {
+    console.error("No valid records found.")
+    process.exit(1)
+  }
 
-// Offline dynamic-pricing recompute: inject dynCost per record (time + context tier); the UI prefers it when present.
-{
-  const providers = loadOpencodeProviders()
-  const rules = loadPluginConfig().dynamicPricing
-  if (providers.length > 0) {
-    let injected = 0
-    for (const r of records) {
-      const dc = recomputeRecordCost(r, providers, rules)
-      if (dc !== null) {
-        r.dynCost = dc
-        injected++
+  // Offline dynamic-pricing recompute: inject dynCost per record (time + context tier); the UI prefers it when present.
+  {
+    const providers = loadOpencodeProviders()
+    const rules = loadPluginConfig().dynamicPricing
+    if (providers.length > 0) {
+      let injected = 0
+      for (const r of records) {
+        const dc = recomputeRecordCost(r, providers, rules)
+        if (dc !== null) {
+          r.dynCost = dc
+          injected++
+        }
+      }
+      if (injected > 0) {
+        console.error(`dynamic pricing: recomputed cost for ${injected}/${records.length} records`)
       }
     }
-    if (injected > 0) {
-      console.error(`dynamic pricing: recomputed cost for ${injected}/${records.length} records`)
+  }
+
+  function loadCostContext(): { embed: CostDisplayEmbed; format: (n: number) => string } {
+    try {
+      const cost = normalizeCostDisplay(loadPluginConfig().cost)
+      return {
+        embed: normalizeCostDisplayEmbed(cost),
+        format: createCostFormatter(cost),
+      }
+    } catch {
+      const cost = normalizeCostDisplay(null)
+      return { embed: normalizeCostDisplayEmbed(cost), format: createCostFormatter(cost) }
     }
+  }
+
+  const { embed: costEmbed, format: fmtCostCli } = loadCostContext()
+  const stats = summarizeStats(records)
+  console.error(
+    records.length +
+      " records, " +
+      stats.totalSessions +
+      " sessions, " +
+      (fmtCostCli(stats.totalCost) || stats.totalCost.toFixed(6) + " " + costEmbed.costUnit) +
+      " total cost",
+  )
+  if (costEmbed.costNote) console.error("  " + costEmbed.costNote)
+
+  const html = genHTML(records, costEmbed)
+  await Bun.write(output, html)
+  console.error("Written: " + output + " (" + (Buffer.byteLength(html) / 1024).toFixed(0) + " KB)")
+
+  if (open) {
+    openInBrowser(resolve(output))
+    console.error("Opened in browser")
   }
 }
 
-function loadCostContext(): { embed: CostDisplayEmbed; format: (n: number) => string } {
-  try {
-    const cost = normalizeCostDisplay(loadPluginConfig().cost)
-    return {
-      embed: normalizeCostDisplayEmbed(cost),
-      format: createCostFormatter(cost),
-    }
-  } catch {
-    const cost = normalizeCostDisplay(null)
-    return { embed: normalizeCostDisplayEmbed(cost), format: createCostFormatter(cost) }
-  }
-}
-
-const { embed: costEmbed, format: fmtCostCli } = loadCostContext()
-const stats = summarizeStats(records)
-console.error(
-  records.length +
-    " records, " +
-    stats.totalSessions +
-    " sessions, " +
-    (fmtCostCli(stats.totalCost) || stats.totalCost.toFixed(6) + " " + costEmbed.costUnit) +
-    " total cost",
-)
-if (costEmbed.costNote) console.error("  " + costEmbed.costNote)
-
-const html = genHTML(records, costEmbed)
-await Bun.write(output, html)
-console.error("Written: " + output + " (" + (Buffer.byteLength(html) / 1024).toFixed(0) + " KB)")
-
-if (open) {
-  openInBrowser(resolve(output))
-  console.error("Opened in browser")
+if (import.meta.main) {
+  await main(process.argv.slice(2))
 }

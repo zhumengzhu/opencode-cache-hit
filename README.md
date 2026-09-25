@@ -147,6 +147,9 @@ The plugin requests main-session history directly with a limit of 10,000 message
 
 Per assistant turn → JSONL (tokens, cache, cost, TTFT, per-tool `toolDurations`, and `skippedForMetrics`). [docs/en/timeline.md](docs/en/timeline.md) · [中文](docs/zh-CN/timeline.md).
 
+> [!NOTE]
+> **A mounted sidebar is a prerequisite.** The collector runs inside the sidebar host, so when OpenCode does not render the sidebar (terminal ≤ 120 columns without `session.sidebar.toggle`, or any child-session view) **nothing is written at all** — no rows, no error, `timeline.enabled: true` notwithstanding. See § Compatibility.
+
 ```json
 "timeline": {
   "enabled": true,

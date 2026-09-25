@@ -147,6 +147,9 @@ OpenCode **TUI 侧边栏插件**：展示 prompt cache 命中率、token 用量�
 
 每 assistant 轮次 → JSONL（tokens、cache、cost、TTFT、各工具 `toolDurations`、`skippedForMetrics`）。详见 [docs/zh-CN/timeline.md](docs/zh-CN/timeline.md)。
 
+> [!NOTE]
+> **前提：侧边栏必须处于挂载状态。** collector 运行在 sidebar host 内，侧边栏未渲染时（终端 ≤ 120 列且未用 `session.sidebar.toggle` 打开，或子 session 视图）**完全不会写入**——没有记录也没有报错，即使 `timeline.enabled: true`。见下文「兼容性」。
+
 ```json
 "timeline": {
   "enabled": true,
