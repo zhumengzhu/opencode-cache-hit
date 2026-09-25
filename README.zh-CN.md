@@ -299,7 +299,13 @@ rm -rf ~/.cache/opencode/packages/opencode-cache-hit@latest
 
 **需要**支持 TUI 插件槽位的 OpenCode（`@opencode-ai/plugin` ≥ 1.14）。可与 visual-cache 共存；运行时除 `package.json` 中声明的 peer 依赖外无额外依赖。
 
-**终端宽度：** OpenCode 仅在 TUI **宽于 120 列**（121+）时自动显示侧边栏。低于此宽度时侧边栏组件根本不会挂载，`sidebar_content` 类插件（含本插件）于是**什么都不渲染**：没有面板、没有占位文字、也没有报错，插件本身照常加载。终端低于 121 列时，用 `session.sidebar.toggle`（默认 `<leader>b`）手动打开，此时以全屏 overlay 形式出现。`tui.json` 无法强制常显：侧边栏状态只有 `auto` / `hide` 两种。
+**侧边栏不显示？** `sidebar_content` 类插件（含本插件）于是**什么都不渲染**：没有面板、没有占位文字、也没有报错，而插件本身照常加载。OpenCode 侧边栏在以下任一情况下被隐藏：
+
+- **终端过窄** —— 仅在 TUI **宽于 120 列**（121+，1.18.x 实测）时自动显示；低于此宽度 `<Sidebar>` 根本不挂载，slot 从不被调用。用 `session.sidebar.toggle`（默认 `<leader>b`）手动打开，此时以全屏 overlay 形式出现。
+- **之前被切成隐藏** —— 该切换会持久化（TUI 状态 `sidebar: "hide"`），一旦隐藏，之后任何宽度下都不会自动出现，直到再次切换。
+- **子 session（sub-agent）** —— 带 `parentID` 的会话永不渲染侧边栏，手动切换也无效。要看面板请打开父会话。
+
+`tui.json` 无法强制常显：侧边栏状态只有 `auto` / `hide` 两种。想给它一个专用按键，可绑定 `keybinds.sidebar_toggle`。
 
 ## 文档索引
 

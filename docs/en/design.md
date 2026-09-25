@@ -201,9 +201,11 @@ Implementation: `agents-view.tsx` calls `formatSubAgentLabel` + `modelRowColor`;
 
 ```mermaid
 flowchart TD
-  M{sidebar mounted by OpenCode?<br/>terminal wider than 120 columns / toggled open}
-  M -->|no| NC[slot never called]
-  M -->|yes| S{sessionId set?}
+  M{child session?<br/>session.parentID set}
+  M -->|yes| NC[slot never called]
+  M -->|no| V{visible?<br/>toggled open, or width > 120<br/>with state "auto"}
+  V -->|no| NC
+  V -->|yes| S{sessionId set?}
   S -->|no| H[no panel]
   S -->|yes| P[TuiPanel]
   P --> D{hasData?}
@@ -214,7 +216,7 @@ flowchart TD
 
 | Concept | Implementation |
 |---------|----------------|
-| Sidebar **mounted** | Not ours: OpenCode renders the sidebar only when the terminal is wider than 120 columns or the user toggled it open; below that this plugin's slot is never called (README § Compatibility) |
+| Sidebar **mounted** | Not ours: OpenCode renders the sidebar only when the session has no `parentID` **and** either the user toggled it open, or the terminal is wider than 120 columns **and** the persisted state is `auto` (not `hide`). Otherwise this plugin's slot is never called (README § Compatibility) |
 | Whole panel | `widget.tsx`: `Show when={sessionId().length > 0}` |
 | Has data | `lineages.length > 0 \|\| subs.length > 0` |
 | Main **block** | Always rendered |
