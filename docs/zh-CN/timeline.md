@@ -146,6 +146,8 @@ export type LlmCallRecord = {
 
 事件驱动路径（`sidebar-host.tsx` → `timeline/collector.ts`）：
 
+> **前提：collector 只在侧边栏挂载期间存在。** 这条路径运行在 sidebar host 内部，所以当 OpenCode 不渲染侧边栏时（终端 ≤ 120 列且未用 `session.sidebar.toggle` 打开，或任何子 session 视图）**完全不会写入 JSONL**：没有记录，也没有报错——即使 `timeline.enabled: true`。见 README「兼容性」。
+
 1. `message.updated` 携带一条 assistant `Message`。
 2. `handleMessage(sessionID, msg)` 判定 scope（`sessionID === root` 为 `main`，在 `childIds` 内为 `child`）。
 3. `src/timeline/records.ts` 的 `assistantMessageToRecord()` 生成一条 `LlmCallRecord`（TTFT 来自 `firstPartTime`，工具耗时来自 `toolTiming`）。
@@ -239,7 +241,7 @@ export type LlmCallRecord = {
 1. 可选 `rotateMaxBytes`：写**前**若当日活跃文件 ≥ 阈值 → 链式 rename（见 § 轮转与清理）。
 2. `appendFile` 一行 JSON。
 3. 可选 `maxLinesPerFile`：写**后**读回活跃文件，只保留最后 N 行（**删行**，不生成 `.1`）。
-4. 事件驱动：`message.updated` → `handleMessage()` → fire-and-forget `appendFile`。无轮询，无去重。
+4. 事件驱动：`message.updated` → `handleMessage()` → fire-and-forget `appendFile`。无轮询，写入端也不去重：`flushIncomplete: true` 时同一 `messageKey` 每次流式 flush 都写一行。由**读取端**折叠——`timeline-dashboard.ts` 按 `messageKey` 保留最新一条，且不允许未完成行覆盖已完成行（`plot-hit-rate.ts` 不去重）。
 
 ## 轮转与清理
 
@@ -281,7 +283,7 @@ export type LlmCallRecord = {
 
 ### 收集
 
-- `message.updated` 事件携带完整 `Message` 对象。collector 直接订阅事件——无轮询，无去重。
+- `message.updated` 事件携带完整 `Message` 对象。collector 直接订阅事件——无轮询，写入端不去重（重复 `messageKey` 行在读取端折叠，见 § 写入流程）。
 - 切换主 session：`resetForRootChange()` 清空 collector 内存；`sidebar-host` 同时 `firstPartTime` / `toolTiming` reset；新 session 的事件自然到达。**`timeline` 配置**（含 `enabled`、`toolSummary`、`dir`）在切换主 session 时从 `cache-hit.json` 重读，与 `display` / `cacheTTL` 相同；同 session 内改配置且不切换 session 时需重载插件才生效。
 - 重启安全：启动前的消息已在上次 session 中写入 JSONL。无需回放，无需扫描。
 
