@@ -41,13 +41,14 @@ Default output: `/tmp/timeline-dashboard-YYYY-MM-DD-HHmmss.html` (timestamp suff
 - Time / session / scope / model / text search filters
 - 3 Chart.js charts: token volume (stacked bar), hit rate + cost (dual axis), duration (bar)
 - Session summary table (mixed main+child scope shown as `main+child`), with `Avg TTFT` and `Avg TPS` columns
-- Per-call detail table with expandable rows (all JSONL fields), `TTFT` and `TPS` columns
+- Per-call detail table: expandable rows (all JSONL fields), sortable columns (click a header; default is newest first), `TTFT` / `TPS` / `TPOT` columns; shows the first N rows in the current order
+- `Reset` button restores the full date range and clears every filter
 - Embedded data — no server needed, just open the HTML file
 
 **How it works:**
 
 1. Reads `timeline-*.jsonl` and rotation backups `timeline-*.jsonl.N` from the default log dir (`~/.local/share/opencode/logs/cache-hit/`) or user-supplied paths/globs
-2. Parses each JSONL line (`schema: 1` validation), sorts by `completedAt` / `created`
+2. Parses each JSONL line (`schema: 1` validation), sorts by `completedAt` / `created`; repeated `messageKey` lines collapse to the latest record that is not incomplete, and invalid/unparseable lines are counted on stderr
 3. Aggregates per-session statistics in the browser when filters change
 4. Generates a self-contained HTML file with:
    - All data embedded as JSON in a `<script>` tag (`<` escaped for safety)
