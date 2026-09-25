@@ -11,7 +11,7 @@
  * Browser is NOT opened unless you pass --open.
  */
 
-import { execSync } from "child_process"
+import { spawnSync } from "child_process"
 import { existsSync, readFileSync, readdirSync } from "fs"
 import { homedir } from "os"
 import { basename, dirname, resolve } from "path"
@@ -754,10 +754,11 @@ refresh()
 }
 
 function openInBrowser(filePath: string): void {
-  const quoted = JSON.stringify(filePath)
-  if (process.platform === "darwin") execSync(`open ${quoted}`)
-  else if (process.platform === "win32") execSync(`cmd /c start "" ${quoted}`)
-  else execSync(`xdg-open ${quoted}`)
+  // Pass the path as an argv element (never via a shell string) so shell
+  // metacharacters in file names cannot be interpreted as commands.
+  if (process.platform === "darwin") spawnSync("open", [filePath], { stdio: "ignore" })
+  else if (process.platform === "win32") spawnSync("cmd", ["/c", "start", "", filePath], { stdio: "ignore" })
+  else spawnSync("xdg-open", [filePath], { stdio: "ignore" })
 }
 
 const { patterns, output, open } = parseArgs(process.argv.slice(2))
