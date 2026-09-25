@@ -81,6 +81,19 @@ Create or edit `~/.config/opencode/tui.json` / `tui.jsonc`:
 
 Local development: use an absolute path to the checkout, such as `"/path/to/opencode-cache-hit"`, instead of the npm name. OpenCode loads the package root and its `index.tsx` entry.
 
+### OpenCode 2
+
+One package serves OpenCode 1 and OpenCode 2 — no separate install. V2 no longer reads `tui.json`: list the plugin under `plugins` in `opencode.json` (or in CLI-only `cli.json`), and the CLI loads the TUI component automatically. `cache-hit.json`, the sidebar, and the JSONL timeline behave identically.
+
+```jsonc
+// ~/.config/opencode/opencode.json
+{
+  "plugins": ["opencode-cache-hit@latest"]
+}
+```
+
+For the rest of the move to V2 (plugin API, server API, `tui.json` → `cli.json`), see the [V2 migration guide](https://opencode.ai/v2/docs/migrate-v1).
+
 Copy `cache-hit.config.example.json` → `~/.config/opencode/cache-hit.json` (recommended) or next to the plugin root. **Restart OpenCode** after changing plugin code or config.
 
 | Install | After update |
