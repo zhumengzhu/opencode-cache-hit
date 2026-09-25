@@ -138,6 +138,8 @@ When all sources fail (e.g. local models with no parts), `ttftMs` is omitted —
 
 Event-driven path in `sidebar-host.tsx` → `timeline/collector.ts`:
 
+> **Prerequisite — the collector only exists while the sidebar is mounted.** This path runs inside the sidebar host, so when OpenCode does not render the sidebar (terminal ≤ 120 columns without `session.sidebar.toggle`, or any child-session view) **no JSONL is written at all**: no rows, no error, `timeline.enabled: true` notwithstanding. See README § Compatibility.
+
 1. `message.updated` delivers one assistant `Message`.
 2. `handleMessage(sessionID, msg)` resolves scope (`main` if `sessionID === root`, else `child` if in `childIds`).
 3. `assistantMessageToRecord()` in `src/timeline/records.ts` builds one `LlmCallRecord` (reads TTFT from `firstPartTime`, tool durations from `toolTiming`).
@@ -229,7 +231,7 @@ Example values above; code defaults below (`enabled: false`, rotation `0` except
 1. Optional size roll **before** append.
 2. `appendFile` one JSON line.
 3. Optional line trim **after** append.
-4. Event-driven: `message.updated` → `handleMessage()` → fire-and-forget `appendFile`. No polling, no dedup.
+4. Event-driven: `message.updated` → `handleMessage()` → fire-and-forget `appendFile`. No polling and no **write-side** dedup: with `flushIncomplete: true` the same `messageKey` is written once per mid-stream flush. Readers collapse those — `timeline-dashboard.ts` keeps the latest record per `messageKey` and never lets an incomplete one replace a complete one (`plot-hit-rate.ts` does not dedupe).
 
 ## Rotation and retention
 
@@ -269,7 +271,7 @@ New filename after midnight; previous days remain until cleanup runs.
 
 ### Collection
 
-- `message.updated` event carries the full `Message` object. The collector subscribes directly — no polling, no dedup.
+- `message.updated` event carries the full `Message` object. The collector subscribes directly — no polling, no write-side dedup (duplicate `messageKey` lines are collapsed on read; see § Write pipeline).
 - Switching main session: `resetForRootChange()` clears collector memory; `firstPartTime` and `toolTiming` trackers reset in `sidebar-host`; events for the new session arrive naturally. **`timeline` config** (including `enabled`, `toolSummary`, `dir`) is re-read from `cache-hit.json` on main session switch — same as `display` / `cacheTTL`; edits mid-session without switching sessions require a plugin reload.
 - Restarts are safe: messages before startup were already written to JSONL in the previous session. No replay, no scan.
 

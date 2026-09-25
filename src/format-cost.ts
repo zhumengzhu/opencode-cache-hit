@@ -153,10 +153,13 @@ export function createCostFormatter(config: CostDisplayConfig): (amountUsd: numb
   const rate = unit === config.currency ? 1 : resolveExchangeRate(config)
 
   return (amount: number) => {
-    if (amount <= 0) return ""
-    const v = amount * rate
-    if (v < minDisplay) return `<${symbol}${minDisplay}`
-    return "~" + symbol + v.toFixed(decimals)
+    // 0 renders as "" (compact panel convention: nothing to show) and non-finite input is
+    // dropped; a negative amount keeps the "~" / "<" markers and adds a sign in front.
+    if (amount === 0 || !Number.isFinite(amount)) return ""
+    const sign = amount < 0 ? "-" : ""
+    const v = Math.abs(amount) * rate
+    if (v < minDisplay) return sign + `<${symbol}${minDisplay}`
+    return sign + "~" + symbol + v.toFixed(decimals)
   }
 }
 

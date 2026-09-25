@@ -178,7 +178,9 @@ function sortKey(r: LlmCallRecord): number {
 
 async function loadRecords(paths: string[]): Promise<LlmCallRecord[]> {
   const records: LlmCallRecord[] = []
-  const seenKeys = new Set<string>()
+  const indexByKey = new Map<string, number>()
+  let skippedInvalid = 0
+  let skippedMalformed = 0
   for (const p of paths) {
     if (!existsSync(p)) continue
     const text = await Bun.file(p).text()
@@ -187,15 +189,37 @@ async function loadRecords(paths: string[]): Promise<LlmCallRecord[]> {
       if (!s) continue
       try {
         const parsed: unknown = JSON.parse(s)
-        if (!isValidRecord(parsed)) continue
-        // Deduplicate by messageKey — handles historical duplicates from pre-fix logs
-        if (seenKeys.has(parsed.messageKey)) continue
-        seenKeys.add(parsed.messageKey)
+        if (!isValidRecord(parsed)) {
+          skippedInvalid++
+          continue
+        }
+        const key = typeof parsed.messageKey === "string" ? parsed.messageKey : ""
+        if (key) {
+          const prevIdx = indexByKey.get(key)
+          if (prevIdx !== undefined) {
+            // Same message logged repeatedly (mid-stream flushes with flushIncomplete): keep the
+            // newest by recordedAt — parsed, since the strings carry local offsets and paths sort
+            // oldest rotation backups last — but never let an incomplete one replace a complete one.
+            const prev = records[prevIdx]
+            if (prev.isComplete && !parsed.isComplete) continue
+            const at = Date.parse(typeof parsed.recordedAt === "string" ? parsed.recordedAt : "") || 0
+            const prevAt = Date.parse(typeof prev.recordedAt === "string" ? prev.recordedAt : "") || 0
+            if (at < prevAt) continue
+            records[prevIdx] = parsed
+            continue
+          }
+          indexByKey.set(key, records.length)
+        }
         records.push(parsed)
       } catch {
-        /* skip malformed */
+        skippedMalformed++
       }
     }
+  }
+  if (skippedInvalid > 0 || skippedMalformed > 0) {
+    console.error(
+      `skipped ${skippedInvalid} invalid record(s) and ${skippedMalformed} unparseable line(s)`,
+    )
   }
   records.sort((a, b) => sortKey(a) - sortKey(b))
   return records
@@ -241,12 +265,15 @@ h2{font-size:16px;margin:24px 0 8px;color:#e6edf3;border-bottom:1px solid #30363
 .filters label{font-size:13px;color:#8b949e;margin-right:4px}
 .filters input,.filters select{background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:6px 10px;font-size:13px}
 .filters select{min-width:120px}
+.filters button{background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:6px 10px;font-size:13px;cursor:pointer}
+.filters button:hover{background:#30363d}
 .chart-wrap{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin-bottom:16px}
 .chart-wrap canvas{width:100%!important;max-height:320px}
 .table-wrap{overflow-x:auto;background:#161b22;border:1px solid #30363d;border-radius:8px;margin-bottom:16px}
 table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;padding:10px 12px;background:#0d1117;color:#8b949e;font-weight:500;border-bottom:1px solid #30363d;white-space:nowrap;cursor:pointer;user-select:none}
-th:hover{color:#e6edf3}
+th{text-align:left;padding:10px 12px;background:#0d1117;color:#8b949e;font-weight:500;border-bottom:1px solid #30363d;white-space:nowrap}
+th[data-sort]{cursor:pointer;user-select:none}
+th[data-sort]:hover{color:#e6edf3}
 td{padding:8px 12px;border-bottom:1px solid #21262d;white-space:nowrap;font-variant-numeric:tabular-nums}
 tr:hover td{background:#1c2128}
 .num{text-align:right;font-family:"SF Mono","Cascadia Code","Fira Code",monospace}
@@ -296,6 +323,7 @@ tr:hover td{background:#1c2128}
 
   <label style="margin-left:8px">Search</label>
   <input type="text" id="filterSearch" placeholder="session / model / messageKey..." style="width:220px">
+  <button type="button" id="filterReset" title="Restore the full date range and clear all filters">Reset</button>
 </div>
 
 <div class="chart-wrap">
@@ -331,7 +359,7 @@ tr:hover td{background:#1c2128}
   </table>
 </div>
 
-<h2>Per-Call Detail <span class="tip-trigger" data-tip="Each row is one assistant message. Click to expand all JSONL fields" style="font-size:11px;color:#8b949e;cursor:help"><span style="display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border:1px solid #8b949e;border-radius:50%;font-size:10px;font-weight:700;line-height:1;color:#8b949e;font-style:normal;margin-right:1px">!</span></span></h2> <span style="font-size:12px;color:#8b949e">(click row to expand; table shows latest N rows)</span>
+<h2>Per-Call Detail <span class="tip-trigger" data-tip="Each row is one assistant message. Click to expand all JSONL fields" style="font-size:11px;color:#8b949e;cursor:help"><span style="display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border:1px solid #8b949e;border-radius:50%;font-size:10px;font-weight:700;line-height:1;color:#8b949e;font-style:normal;margin-right:1px">!</span></span></h2> <span style="font-size:12px;color:#8b949e">(click a row to expand, a header to sort; shows the first N rows in the current order)</span>
 <div class="filters" style="margin-bottom:4px">
   <label style="color:#8b949e">Rows</label>
   <select id="pageSize" style="width:70px">
@@ -342,10 +370,10 @@ tr:hover td{background:#1c2128}
 <div class="table-wrap">
   <table id="detailTable">
     <thead><tr>
-      <th style="width:0"></th><th class="num">Time</th><th>Scope</th><th>Session</th><th>Model</th>
-      <th class="num">Input</th><th class="num">Output</th><th class="num">CacheR</th><th class="num">CacheW</th>
-      <th class="num">Hit%</th><th class="num">Cost</th><th class="num">Dur</th>
-      <th class="num">TTFT</th><th class="num">TPS</th><th class="num">TPOT</th>
+      <th style="width:0"></th><th class="num" data-sort="created">Time</th><th data-sort="scope">Scope</th><th data-sort="session">Session</th><th data-sort="model">Model</th>
+      <th class="num" data-sort="input">Input</th><th class="num" data-sort="output">Output</th><th class="num" data-sort="cacheRead">CacheR</th><th class="num" data-sort="cacheWrite">CacheW</th>
+      <th class="num" data-sort="hit">Hit%</th><th class="num" data-sort="cost">Cost</th><th class="num" data-sort="duration">Dur</th>
+      <th class="num" data-sort="ttft">TTFT</th><th class="num" data-sort="tps">TPS</th><th class="num" data-sort="tpot">TPOT</th>
     </tr></thead>
     <tbody id="detailBody"></tbody>
   </table>
@@ -353,13 +381,15 @@ tr:hover td{background:#1c2128}
 
 <script>
 var RAW_DATA = TMPL_DATA
-var EXPAND_FIELDS = ["schema","recordedAt","sessionId","rootSessionId","scope","messageKey","modelId","created","completedAt","durationMs","isComplete","input","output","reasoning","cacheRead","cacheWrite","cost","hitPercent","skippedForHit","ttftMs","ttftSource","tps","tpot","itlP50","itlP90","itlCount","finish","toolDurations"]
+var EXPAND_FIELDS = ["schema","recordedAt","sessionId","rootSessionId","scope","messageKey","modelId","created","completedAt","durationMs","isComplete","input","output","reasoning","cacheRead","cacheWrite","cost","hitPercent","skippedForHit","skippedForMetrics","ttftMs","ttftSource","tps","tpot","itlP50","itlP90","itlCount","finish","toolDurations"]
 
 function fmtTtft(ms) { if (ms == null) return "-"; return ms < 1000 ? ms + "ms" : (ms / 1000).toFixed(1) + "s" }
 function fmtTps(v) { if (v == null) return "-"; return Math.round(v) + " tok/s" }
 function fmtTpot(v) { if (v == null) return "-"; return v >= 1000 ? (v/1000).toFixed(1)+"s/tok" : Math.round(v)+" ms/tok" }
 function fmtDur(ms) { if (ms == null) return "-"; return ms < 1000 ? ms + "ms" : (ms/1000).toFixed(1) + "s" }
 function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;") }
+var SHORT_SESSION_CHARS = 12
+function shortSession(id) { return id ? String(id).slice(-SHORT_SESSION_CHARS) : "-" }
 
 function ensureCostDisplay(raw) {
   var d = { currency:"CNY", costUnit:"USD", rate:6.77, symbol:"¥", decimals:3, minDisplay:0.01, chartLabel:"Cost (¥)", costNote:"JSONL cost is USD; displayed as CNY @ 6.77" }
@@ -380,16 +410,18 @@ function ensureCostDisplay(raw) {
 var COST_DISPLAY = ensureCostDisplay(TMPL_COST)
 
 function convertCost(amount) {
-  if (!isFinite(amount) || amount <= 0) return 0
+  if (!isFinite(amount)) return 0
   return amount * COST_DISPLAY.rate
 }
 
 function fmtCost(amount) {
-  if (!isFinite(amount) || amount <= 0) return "-"
-  var v = convertCost(amount)
+  if (!isFinite(amount)) return "-"
+  if (amount === 0) return "~" + COST_DISPLAY.symbol + (0).toFixed(COST_DISPLAY.decimals)
+  var sign = amount < 0 ? "-" : ""
+  var v = convertCost(Math.abs(amount))
   if (!isFinite(v)) return "-"
-  if (v < COST_DISPLAY.minDisplay) return "<" + COST_DISPLAY.symbol + COST_DISPLAY.minDisplay
-  return "~" + COST_DISPLAY.symbol + v.toFixed(COST_DISPLAY.decimals)
+  if (v < COST_DISPLAY.minDisplay) return sign + "<" + COST_DISPLAY.symbol + COST_DISPLAY.minDisplay
+  return sign + "~" + COST_DISPLAY.symbol + v.toFixed(COST_DISPLAY.decimals)
 }
 
 /* Dynamic pricing: prefer recomputed dynCost when present. */
@@ -423,6 +455,12 @@ function hitValues(rows) {
   return rows.filter(function(r){ return !r.skippedForHit && r.hitPercent != null }).map(function(r){ return r.hitPercent })
 }
 
+/* Charts plot on a created-time x axis, so order points by created (records are globally
+   sorted by completion time; concurrent child sessions can interleave the two). */
+function byCreated(data) {
+  return data.slice().sort(function(a, b){ return String(a.created).localeCompare(String(b.created)) })
+}
+
 function sessionScopeLabel(rows) {
   var scopes = [...new Set(rows.map(function(r){ return r.scope }).filter(Boolean))]
   if (scopes.length === 0) return "(unknown)"
@@ -450,10 +488,10 @@ function renderSummary(data) {
     {l:"Total Tokens", v:(tt/1e6).toFixed(2)+"M", s:"In "+(ti/1e6).toFixed(2)+"M"},
     {l:"Total Input", v:ti.toLocaleString(), s:"Out "+to.toLocaleString()},
     {l:"Cache Read", v:tcr.toLocaleString(), s:"Write "+tcw.toLocaleString()},
-    {l:"Avg Hit Rate", v:avg.toFixed(1)+"%", s:hits.length+" plottable calls", c:cls},
+    {l:"Avg Hit Rate", v:hits.length?avg.toFixed(1)+"%":"-", s:hits.length+" plottable calls", c:hits.length?cls:""},
     {l:"Total Cost", v:(dyn>0?"\u2248":"")+fmtCost(tc), s:COST_DISPLAY.costUnit !== COST_DISPLAY.currency ? "raw "+COST_DISPLAY.costUnit+" in JSONL" : ""},
-    {l:"Models", v:models||"(none)", s:""},
-    {l:"Date Range", v:data.length?data[0].created.slice(0,10):"-", s:data.length?"~ "+data[data.length-1].created.slice(0,10):""}
+    {l:"Models", v:esc(models)||"(none)", s:""},
+    {l:"Date Range", v:data.length?esc(data[0].created.slice(0,10)):"-", s:data.length?"~ "+esc(data[data.length-1].created.slice(0,10)):""}
   ]
   document.getElementById("summaryGrid").innerHTML = cards.map(function(c){
     return '<div class="card"><div class="lbl">'+c.l+'</div><div class="val'+(c.c?" "+c.c:"")+'">'+c.v+'</div>'+(c.s?'<div class="subval">'+c.s+'</div>':"")+'</div>'
@@ -466,17 +504,22 @@ function updateSubtitle(data) {
   document.getElementById("subtitle").textContent = data.length + " records (filtered), " + sessions.length + " sessions" + (models.length?", "+models.join(", "):"")
 }
 
+function setFullDateRange() {
+  if (RAW_DATA.length === 0) return
+  var dates = RAW_DATA.map(function(r){return r.created.slice(0,10)}).filter(function(d,i,a){return a.indexOf(d)===i}).sort()
+  document.getElementById("filterDateFrom").value = dates[0]
+  document.getElementById("filterDateTo").value = dates[dates.length-1]
+}
+
 function populateFilters() {
   var sessions = [...new Set(RAW_DATA.filter(function(r){return r.rootSessionId}).map(function(r){return r.rootSessionId}))].sort()
   var models = [...new Set(RAW_DATA.filter(function(r){return r.modelId}).map(function(r){return r.modelId}))].sort()
   var selS = document.getElementById("filterSession")
-  sessions.forEach(function(s){ var o=document.createElement("option"); o.value=s; o.textContent=s.slice(-16); selS.appendChild(o) })
+  sessions.forEach(function(s){ var o=document.createElement("option"); o.value=s; o.textContent=shortSession(s); selS.appendChild(o) })
   var selM = document.getElementById("filterModel")
   models.forEach(function(m){ var o=document.createElement("option"); o.value=m; o.textContent=m; selM.appendChild(o) })
   if (RAW_DATA.length > 0) {
-    var dates = RAW_DATA.map(function(r){return r.created.slice(0,10)}).filter(function(d,i,a){return a.indexOf(d)===i}).sort()
-    document.getElementById("filterDateFrom").value = dates[0]
-    document.getElementById("filterDateTo").value = dates[dates.length-1]
+    setFullDateRange()
   }
   updateSubtitle(RAW_DATA)
 }
@@ -516,6 +559,7 @@ function buildTokenChart(data) {
   if (!chartAvailable()) return
   var ctx = chartCtx("chartTokens")
   if (!ctx) return
+  data = byCreated(data)
   var stacked = document.getElementById("toggleStack").checked
   if (chartTokens) chartTokens.destroy()
   chartTokens = new Chart(ctx, {
@@ -544,6 +588,7 @@ function buildHitCostChart(data) {
   if (!chartAvailable()) return
   var ctx = chartCtx("chartHitCost")
   if (!ctx) return
+  data = byCreated(data)
   if (chartHitCost) chartHitCost.destroy()
   chartHitCost = new Chart(ctx, {
     type: "line",
@@ -563,7 +608,7 @@ function buildHitCostChart(data) {
       scales: {
         x: { ticks:{color:"#8b949e",maxRotation:45,maxTicksLimit:20}, grid:{color:"#21262d"} },
         y: { type:"linear", position:"left", min:0, max:100, ticks:{color:"#3fb950"}, grid:{color:"#21262d"}, title:{display:true, text:"Hit %", color:"#3fb950"} },
-        y1: { type:"linear", position:"right", min:0, ticks:{color:"#f85149"}, grid:{display:false}, title:{display:true, text:COST_DISPLAY.chartLabel, color:"#f85149"} }
+        y1: { type:"linear", position:"right", suggestedMin:0, ticks:{color:"#f85149"}, grid:{display:false}, title:{display:true, text:COST_DISPLAY.chartLabel, color:"#f85149"} }
       },
       plugins: { legend:{ labels:{color:"#e6edf3",boxWidth:12,padding:12} } }
     }
@@ -574,6 +619,7 @@ function buildDurationChart(data) {
   if (!chartAvailable()) return
   var ctx = chartCtx("chartDuration")
   if (!ctx) return
+  data = byCreated(data)
   if (chartDuration) chartDuration.destroy()
   chartDuration = new Chart(ctx, {
     type: "bar",
@@ -622,20 +668,20 @@ function renderSessionTable(data) {
       avgTtft: ttfts.length ? ttfts.reduce(function(s,v){return s+v},0)/ttfts.length : null,
       avgTps: ttps.length ? ttps.reduce(function(s,v){return s+v},0)/ttps.length : null,
       avgTpot: tpots.length ? tpots.reduce(function(s,v){return s+v},0)/tpots.length : null,
-      start:rd[0].created||""
+      start:rd.map(function(r){return r.created}).sort()[0]||""
     })
   })
   rows.sort(function(a,b){return a.start.localeCompare(b.start)})
   var cls = function(p){return p>90?"ok":p>70?"warn":"err"}
   document.getElementById("sessionBody").innerHTML = rows.map(function(r){
-    return '<tr><td style="max-width:180px;overflow:hidden;text-overflow:ellipsis" title="'+esc(r.id)+'">'+esc(r.id.slice(-16))+
+    return '<tr><td style="max-width:180px;overflow:hidden;text-overflow:ellipsis" title="'+esc(r.id)+'">'+esc(shortSession(r.id))+
       '</td><td><span class="pill pill-model">'+esc(r.model)+'</span></td><td><span class="pill '+scopePillClass(r.scope)+'">'+esc(r.scope)+
       '</span></td><td class="num">'+r.calls+'</td><td class="num">'+(r.totalT/1e6).toFixed(2)+'M</td><td class="num">'+r.ti.toLocaleString()+
       '</td><td class="num">'+r.to.toLocaleString()+'</td><td class="num">'+r.tcr.toLocaleString()+
       '</td><td class="num '+cls(r.avg)+'">'+r.avg.toFixed(1)+'%</td><td class="num">'+(r.dynUsed?"\u2248":"")+fmtCost(r.cost)+
       '</td><td class="num">'+fmtTtft(r.avgTtft)+'</td><td class="num">'+fmtTps(r.avgTps)+
       '</td><td class="num">'+fmtTpot(r.avgTpot)+
-      '</td><td>'+r.start.slice(0,19)+'</td></tr>'
+      '</td><td>'+esc(r.start.slice(0,19))+'</td></tr>'
   }).join("")
 }
 
@@ -659,16 +705,69 @@ function expandDetailGrid(r) {
   }).join("")
 }
 
+/* Per-call sorting: a header click re-sorts, and the table shows the first N rows in that order. */
+var DETAIL_SORT = { key: "created", dir: -1 }
+var DETAIL_TEXT_KEYS = { created:1, scope:1, session:1, model:1 }
+var DETAIL_SORT_VALUE = {
+  created: function(r){ return r.created },
+  scope: function(r){ return r.scope || "" },
+  session: function(r){ return r.rootSessionId || "" },
+  model: function(r){ return r.modelId || "" },
+  input: function(r){ return r.input },
+  output: function(r){ return r.output },
+  cacheRead: function(r){ return r.cacheRead },
+  cacheWrite: function(r){ return r.cacheWrite },
+  hit: function(r){ return r.hitPercent == null ? null : r.hitPercent },
+  cost: function(r){ return costOf(r) },
+  duration: function(r){ return r.durationMs == null ? null : r.durationMs },
+  ttft: function(r){ return r.ttftMs == null ? null : r.ttftMs },
+  tps: function(r){ return r.tps == null ? null : r.tps },
+  tpot: function(r){ return r.tpot == null ? null : r.tpot }
+}
+
+function sortDetailRows(rows) {
+  var get = DETAIL_SORT_VALUE[DETAIL_SORT.key]
+  if (!get) return rows
+  var dir = DETAIL_SORT.dir
+  return rows.slice().sort(function(a, b){
+    var va = get(a), vb = get(b)
+    if (va == null && vb == null) return 0
+    if (va == null) return 1   /* missing values last, in either direction */
+    if (vb == null) return -1
+    if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir
+    return String(va).localeCompare(String(vb)) * dir
+  })
+}
+
+function applySortIndicators() {
+  document.querySelectorAll("#detailTable th[data-sort]").forEach(function(th){
+    if (th.dataset["label"] === undefined) th.dataset["label"] = th.textContent
+    th.textContent = th.dataset["label"] + (th.dataset["sort"] === DETAIL_SORT.key ? (DETAIL_SORT.dir > 0 ? " \u25b2" : " \u25bc") : "")
+  })
+}
+
+document.querySelectorAll("#detailTable th[data-sort]").forEach(function(th){
+  th.addEventListener("click", function(){
+    var key = th.dataset["sort"]
+    if (DETAIL_SORT.key === key) DETAIL_SORT.dir = -DETAIL_SORT.dir
+    else { DETAIL_SORT.key = key; DETAIL_SORT.dir = DETAIL_TEXT_KEYS[key] ? 1 : -1 }
+    applySortIndicators()
+    refresh()
+  })
+})
+
 function renderDetailTable(data) {
   var ps = parseInt(document.getElementById("pageSize").value)
-  var disp = ps >= data.length ? data : data.slice(data.length - ps)
+  var disp = sortDetailRows(data).slice(0, ps)
   var cls = function(p){return p!=null?(p>90?"ok":p>70?"warn":"err"):""}
-  document.getElementById("detailBody").innerHTML = disp.map(function(r, i){
-    var shortId = r.rootSessionId ? r.rootSessionId.slice(-12) : "-"
+  document.getElementById("detailBody").innerHTML = disp.map(function(r){
+    var key = detailKey(r)
+    var open = !!openDetailKeys[key]
+    var shortId = shortSession(r.rootSessionId)
     var hitPct = r.hitPercent != null ? r.hitPercent.toFixed(1)+"%" : "-"
-    return '<tr class="dp" data-idx="'+i+'">'+
-      '<td style="cursor:pointer;color:#8b949e;text-align:center;font-size:16px;user-select:none">&#9654;</td>'+
-      '<td class="num">'+r.created.slice(0,19).replace("T"," ")+'</td>'+
+    return '<tr class="dp" data-key="'+esc(key)+'">'+
+      '<td style="cursor:pointer;color:#8b949e;text-align:center;font-size:16px;user-select:none">'+(open?"&#9660;":"&#9654;")+'</td>'+
+      '<td class="num">'+esc(r.created.slice(0,19).replace("T"," "))+'</td>'+
       '<td><span class="pill '+scopePillClass(r.scope)+'">'+esc(r.scope)+'</span></td>'+
       '<td style="max-width:120px;overflow:hidden;text-overflow:ellipsis" title="'+esc(r.rootSessionId||"")+'">'+esc(shortId)+'</td>'+
       '<td><span class="pill pill-model">'+esc(r.modelId||"-")+'</span></td>'+
@@ -683,19 +782,23 @@ function renderDetailTable(data) {
       '<td class="num">'+fmtTps(r.tps)+'</td>'+
       '<td class="num">'+fmtTpot(r.tpot)+'</td>'+
     '</tr>'+
-    '<tr class="dr" data-idx="'+i+'"><td colspan="15"><div class="detail-inner"><div class="detail-grid">'+expandDetailGrid(r)+'</div></div></td></tr>'
+    '<tr class="dr'+(open?" open":"")+'" data-key="'+esc(key)+'"><td colspan="15"><div class="detail-inner"><div class="detail-grid">'+expandDetailGrid(r)+'</div></div></td></tr>'
   }).join("")
 }
+
+/* Per-call rows are keyed by messageKey so an open row survives a refresh (filters, search, paging). */
+var openDetailKeys = {}
+function detailKey(r) { return r.messageKey || r.created + "|" + (r.modelId || "") }
 
 document.getElementById("detailBody").addEventListener("click", function(e){
   var row = e.target.closest(".dp")
   if (!row) return
-  var idx = row.dataset["idx"]
-  var detail = document.querySelector('.dr[data-idx="'+idx+'"]')
-  if (detail) {
-    detail.classList.toggle("open")
-    row.querySelector("td:first-child").innerHTML = detail.classList.contains("open") ? "&#9660;" : "&#9654;"
-  }
+  var detail = row.nextElementSibling
+  if (!detail || !detail.classList.contains("dr")) return
+  var opened = detail.classList.toggle("open")
+  var key = row.dataset["key"]
+  if (key) openDetailKeys[key] = opened
+  row.querySelector("td:first-child").innerHTML = opened ? "&#9660;" : "&#9654;"
 })
 
 function refresh() {
@@ -725,24 +828,36 @@ document.getElementById("pageSize").addEventListener("change", refresh)
 var tipEl = document.createElement("div")
 tipEl.className = "tip-box"
 document.body.appendChild(tipEl)
+function showTip(el, x, y) {
+  tipEl.textContent = el.getAttribute("data-tip")
+  tipEl.style.display = "block"
+  tipEl.style.left = x + "px"
+  tipEl.style.top = (y + 14) + "px"
+}
+function hideTip() { tipEl.style.display = "none" }
 document.querySelectorAll(".tip-trigger").forEach(function(el){
-  el.addEventListener("mouseenter", function(e){
-    tipEl.textContent = el.getAttribute("data-tip")
-    tipEl.style.display = "block"
-    tipEl.style.left = e.clientX + "px"
-    tipEl.style.top = (e.clientY + 14) + "px"
-  })
-  el.addEventListener("mousemove", function(e){
-    tipEl.style.left = e.clientX + "px"
-    tipEl.style.top = (e.clientY + 14) + "px"
-  })
-  el.addEventListener("mouseleave", function(){
-    tipEl.style.display = "none"
-  })
+  /* Focusable + labelled so the explanation is reachable by keyboard and tap, not hover only. */
+  el.tabIndex = 0
+  el.setAttribute("aria-label", el.getAttribute("data-tip") || "")
+  el.addEventListener("mouseenter", function(e){ showTip(el, e.clientX, e.clientY) })
+  el.addEventListener("mousemove", function(e){ showTip(el, e.clientX, e.clientY) })
+  el.addEventListener("mouseleave", hideTip)
+  el.addEventListener("focus", function(){ var r = el.getBoundingClientRect(); showTip(el, r.left, r.bottom) })
+  el.addEventListener("blur", hideTip)
+})
+
+document.getElementById("filterReset").addEventListener("click", function(){
+  document.getElementById("filterSession").value = "all"
+  document.getElementById("filterScope").value = "all"
+  document.getElementById("filterModel").value = "all"
+  document.getElementById("filterSearch").value = ""
+  setFullDateRange()
+  refresh()
 })
 
 applyCostLabels()
 populateFilters()
+applySortIndicators()
 refresh()
 </script>
 </body>
