@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": true,
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
+    "types": ["node", "bun"],
+    "skipLibCheck": true
+  },
+  // Type-check everything tsc can resolve without a build. `tui.ts` is the one
+  // exclusion: it re-exports the gitignored dist/tui.js, which has no types.
+  "include": ["index.tsx", "server.ts", "src", "tests", "scripts"]
+}

@@ -74,7 +74,7 @@ sequenceDiagram
 
   Slot->>Host: sessionId, display, api
   Host->>API: session.list → childIds
-  API-->>Host: message.updated { info: Message }
+  API-->>Host: message { info } / tick
   Host->>Host: refreshTick++, timeline.handleMessage(info)
   Host->>API: session.messages(sid, limit=10000) → main metric history
   Host->>API: session.get(cid) / session.messages(cid) → child aggregates
@@ -87,14 +87,17 @@ sequenceDiagram
 
 | File | Role |
 |------|------|
-| `plugin.tsx` | `api.slots.register` (`order: 56`, next to visual-cache); load config |
-| `sidebar-host.tsx` | Bind `sessionId`; direct main history; `mainSnap` / `mainMessages` / `subAgentList`; `refreshTick` + `message.updated` |
+| `plugin.tsx` | Dual entry: V1 `tui(api)` + V2 `setup(ctx)`; load config and formatters |
+| `types.ts` | Internal `TuiApi` / `TuiEvent` contract shared by both versions |
+| `v1-map.ts` | V1 legacy `{ properties }` events and SDK wire format (`{ path, query }` / `{ data }` envelopes) → internal contract (pure, tested) |
+| `v2/adapter.ts` | V2 context/events → internal contract |
+| `sidebar-host.tsx` | Bind `sessionId`; direct main history; `mainSnap` / `mainMessages` / `subAgentList`; `refreshTick` + message/tick events |
 | `widget.tsx` | Render panel when `sessionId` set; `noData` when empty |
 | `use-cache-hit-metrics.ts` | Hit row, trend, main block visibility |
 | `main-session-view.tsx` / `agents-view.tsx` | Business sections |
 | `cache-hit-rows.tsx` | Shared token rows in Detail |
 | `stats.ts` | Pure aggregation (no UI) |
-| `session-messages.ts` | Direct main-session history loader and source status |
+| `session-messages.ts` | Main-session history loader over the typed client contract and source status |
 | `lineage-stats.ts` | Provider/model lineage buckets and active-lineage selection |
 | `pricing.ts` | Per-message mixed-model cache value calculations |
 | `cache-ttl.ts` / `cache-ttl-view.tsx` | Independent TTL activity per lineage |
@@ -105,6 +108,42 @@ sequenceDiagram
 | `token-speed.ts` / `streaming-state.ts` | Speed calculations & streaming phase state machine |
 | `timeline/` | Per-call JSONL (`records` / `writer` / `collector`) |
 | `plugin-config.ts` / `load-config.ts` | Config normalization |
+
+### Version support
+
+One package serves OpenCode 1 and OpenCode 2 from a single default export in `src/plugin.tsx`:
+
+| Version | Entry | Slot |
+|---------|-------|------|
+| V1 | `tui(api)` | `sidebar_content` (`order: 56`) |
+| V2 | `setup(ctx)` | `sidebar.content` |
+
+- V2's CLI loader calls `setup(ctx)` and ignores `tui`; V1's TUI loader calls `tui(api)` and ignores `setup`.
+- `exports["."]` is a no-op V2 server entry (`src/v2/server.ts`), so the package loads from `opencode.json` and V2 reports `features.tui` before mounting the sidebar.
+- `src/v2/adapter.ts` maps the V2 context onto the internal `TuiApi` / `TuiEvent` contract (`src/types.ts`); pure mapping lives in `src/v2/map.ts` and is unit-tested without a running OpenCode. V1's legacy event payloads are mapped onto the same contract in `src/v1-map.ts`.
+- V2 has no message-level stream event: one step is one assistant message, so the adapter synthesizes `message` events from `session.step.started` plus the terminal `session.step.ended` / `session.step.failed` (the store row supplies the compaction `summary` flag).
+- V2 plugins run on OpenCode's bundled OpenTUI (`0.6.6` in current releases). Keep the `@opentui/*` peers at `>=0.6.6`: older builds register `OPENTUI_FORCE_WCWIDTH` with a conflicting type in OpenTUI's `globalThis` env registry, and plugin load aborts.
+- Local directory installs resolve `<dir>/server` / `<dir>/tui` instead of `package.json` exports; the root `server.ts` / `tui.ts` shims forward to the no-op server entry and the built bundle. Package-name installs use `exports`.
+- Since 1.0.0 only the V2 path is officially supported and tested; the V1 path is best-effort.
+
+### Event mapping
+
+The internal contract (`TuiEvent` in `src/types.ts`) is version-neutral; each entrypoint owns its own translation:
+
+| Internal | V1 source (`tui(api)`) | V2 source (`setup(ctx)`) | Notes |
+|----------|------------------------|--------------------------|-------|
+| `part` | `message.part.updated` (`properties.part`) | `session.text.started`, `session.reasoning.started`, `session.tool.input.started`, `session.tool.success` / `failed` | V2 splits a tool call across events (callID/name/start/end); only V1 reports `state.status = "pending"`, used for pure-tool-call TTFT |
+| `message` | `message.updated` (`properties.info`) | `session.step.started` + `session.step.ended` / `session.step.failed` | One step is one assistant message; the store row contributes the compaction `summary` flag. A failed step has no `finish`, so it maps to `"error"` as V2 projects it |
+| `delta` | `message.part.delta` (`{ messageID, field }`) | `session.text.delta`, `session.reasoning.delta` | First chunk provides the TUI-side TTFT fallback and ITL intervals; V1's `field: "tool"` deltas are dropped on purpose (tool parts carry their own timestamps) |
+| `tick` | `message.updated` without `info` | `session.usage.updated` | Refresh only (re-read `session.get()`); carries no message |
+
+- V2 has no message-level stream event; `session.text.ended` / `session.reasoning.ended` overwrite the accumulated deltas in the adapter's parts cache (the authoritative full value).
+- The host-event surface is one table in `src/v2/adapter.ts`; each of its names must have a payload case in `tests/fixtures/v2-events.ts`. A case delivers host payloads in order and pins the internal events they must produce, in full — so changing which payload field the adapter reads (e.g. `created` → `data.timestamp`) turns that case red. Those payloads are **assumed, not captured**: the host's own timeline output confirms the four fields the adapter depends on (`created`, delta message identity, tool `id`/`name`, `step.ended` `assistantMessageID`), and the event names are confirmed by scanning the shipped OpenCode 2.0.32 CLI binary (every name below is present, and the SDK bus schema's `session.next.*` namespace is absent there). The `step.started` metadata fields and the failure/deletion events are still unconfirmed by observation. A real capture replaces them; they are not evidence about the host.
+- `session.message.content.updated` exists in the host (its name is in the 2.0.32 binary) but the adapter does **not** subscribe to it. It only ever carried a full content snapshot on replay, and handling it would only refresh part timestamps for a replayed message; until a capture shows it actually firing, the missing handler costs at most TTFT on replays, never correctness.
+- `api.state.part()` is a host API on V1; on V2 the adapter keeps the same view in a bounded cache (200 messages).
+- V2 history reads go through the generated client (`message.list` in 200-row cursor pages up to the caller's limit). A missing client or a failed first page falls back to the TUI store window; that window is filled by the host one page at a time (20 rows in current builds), so a populated window is always reported incomplete — the plugin contract exposes no cursor, and the row count is not a usable proxy. An empty window first waits for the one in-flight `message.sync` (nothing re-reads the store after it lands), so an empty result means either a genuinely empty session (`complete`) or a failed sync (`incomplete`).
+- A plugin hot reload destroys the sidebar host and the adapter, so an in-flight message loses the part events that fed the trackers. `step.ended` therefore replays the message's timed parts from its store row before emitting `message` (see [ttft-hybrid.md § Store replay](./ttft-hybrid.md)); text parts have no stored timestamp, so a reply that opens with text cannot recover TTFT that way (only the first content part may seed it).
+- `message` always carries `sessionID`: V1 reads it from the info, V2 from the step event.
 
 ### TUI panel framework (`src/tui-panel/`)
 
@@ -130,7 +169,7 @@ Implementation: `src/child-session-sync.ts` (used by `sidebar-host`).
 flowchart TD
   A[sessionId changes] --> B[resetForParentChange]
   B --> C[loadChildren: session.list]
-  E[message.updated any session] --> R[refreshTick++]
+  E[message event any session] --> R[refreshTick++]
   E --> F{sessionID !== parent?}
   F -->|yes| G[debounce 200ms]
   G --> C2[loadChildren overwrites childIds]
@@ -142,7 +181,7 @@ flowchart TD
 
 - **Single source of truth**: `childIds` always **replaced** from `session.list` (no `session.get` append).
 - **Races**: `listGen` increments on parent change; callbacks check generation and `parentId`.
-- **Streaming**: foreign-session `message.updated` is debounced (`CHILD_LIST_DEBOUNCE_MS` = 200ms).
+- **Streaming**: foreign-session `message` events are debounced (`CHILD_LIST_DEBOUNCE_MS` = 200ms).
 - **Depth**: direct children only (`parentID === sid`); nested sub-agents are future work.
 - **Data**: `session.get(cid)` → `aggregateFromSessionObject` (primary); falls back to `messages(cid)` → `aggregateSessionFromMessages`. Model/provider metadata is patched from messages when missing from session aggregates (`withModelFallback`).
 
@@ -184,7 +223,7 @@ Implementation: `agents-view.tsx` calls `formatSubAgentLabel` + `modelRowColor`;
 | Sub-agent content | `refreshTick` + `childIds` → `session.get?.(cid)` per child; fallback `messages(cid)` |
 | Sub-agent ids | `session.list` callback / debounced refresh on foreign activity |
 
-`sidebar-host` subscribes to `message.updated` and bumps `refreshTick` so dependent memos recompute. Main metric totals prefer the DB-level `session.get` aggregate (complete, not capped); lineage buckets use direct history. Streaming speed and TTFT use the TUI mirror. Child totals use `session.get()` when available.
+`sidebar-host` subscribes to `message` / `tick` and bumps `refreshTick` so dependent memos recompute. Main metric totals prefer the DB-level `session.get` aggregate (complete, not capped); lineage buckets use direct history. Streaming speed and TTFT use the TUI mirror. Child totals use `session.get()` when available.
 
 ### session.get() availability
 

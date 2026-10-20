@@ -7,7 +7,7 @@
   "display": {
     "lang": "en",
     "panelBorder": true,
-    "speedUnit": "tpot"
+    "speedUnit": "tps"
   },
   "timeline": {
     "enabled": false,

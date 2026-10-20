@@ -8,6 +8,8 @@
 
 实现说明：[TTFT 混合实现](./ttft-hybrid.md)。
 
+> **事件名**：本文使用插件内部事件契约（`src/types.ts` 的 `TuiEvent`）：`part` / `message` / `delta` / `tick`。OpenCode 1（`message.part.updated`、`message.part.delta` …）与 OpenCode 2（`session.text.started`、`session.text.delta` …）的源事件分别在 `v1-map.ts` / `v2/adapter.ts` 中映射到该契约，见 [design.md § 事件映射](./design.md#事件映射)。
+
 ---
 
 ## 何时显示 `"—"` 属于正常情况
@@ -34,8 +36,8 @@
 部分环境不提供流式 part 或 `part.time.start`：
 
 - **本地模型**（LM Studio、Ollama）可能无 parts 表 ([#23673](https://github.com/anomalyco/opencode/issues/23673))
-- **`message.part.updated` 无 `part.time.start`** — 插件会尝试 TUI 端增量与 part 状态扫描；两者皆空则 TTFT 为 `"—"`
-- **部分 OpenCode 版本不投递 `message.part.delta`** ([#27663](https://github.com/anomalyco/opencode/issues/27663))
+- **`part` 事件无 `part.time.start`** — 插件会尝试 TUI 端增量与 part 状态扫描；两者皆空则 TTFT 为 `"—"`
+- **部分 OpenCode 版本不投递流式增量**（V1 的 `message.part.delta`，[#27663](https://github.com/anomalyco/opencode/issues/27663)）
 - **时间戳无效**（`part.time.start <= msg.time.created`，如 SDK [#21544](https://github.com/anomalyco/opencode/issues/21544)）— 省略该值，避免显示 0 或负 TTFT
 
 ### 3. 侧边栏有 TTFT 但 JSONL 无 `ttftMs`
@@ -72,7 +74,7 @@
 | Issue | 对 TTFT 的影响 |
 |-------|----------------|
 | [#23673](https://github.com/anomalyco/opencode/issues/23673) 本地模型无 parts | 常始终为 `"—"` |
-| [#27663](https://github.com/anomalyco/opencode/issues/27663) 丢失 `message.part.delta` | TUI 端路径可能不可用 |
+| [#27663](https://github.com/anomalyco/opencode/issues/27663) 丢失 V1 `message.part.delta` | TUI 端路径可能不可用 |
 | [#26924](https://github.com/anomalyco/opencode/issues/26924) Part 事件乱序 | 插件通过多数据源补偿 |
 | [#21544](https://github.com/anomalyco/opencode/issues/21544) `time.start` 被覆盖 | 无效 SDK 端时间戳会被跳过 |
 

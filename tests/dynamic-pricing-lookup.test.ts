@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { resolveModelCost, lookupModelCost } from "../src/dynamic-pricing/lookup.ts"
 import { computePricing } from "../src/pricing.ts"
-import type { ProviderInfo } from "../src/types.ts"
+import type { ModelCost, ProviderInfo } from "../src/types.ts"
 import { DEFAULT_SCHEDULE } from "../src/dynamic-pricing/types.ts"
 
 const TZ = "Asia/Shanghai"
@@ -283,34 +283,46 @@ describe("resolveModelCost — explicit rules override", () => {
 })
 
 describe("resolveModelCost — runtime cost normalization (#1)", () => {
+  /** Runtime cost dialect (see normalizeRuntimeCost): opencode converts config
+   *  context_over_200k into tiers[] / experimentalOver200K at runtime. */
+  type RuntimeModelCost = ModelCost & {
+    tiers?: Array<{
+      input: number
+      output: number
+      cache: { read: number; write: number }
+      tier?: { type: "context"; size: number }
+    }>
+    experimentalOver200K?: ModelCost
+  }
+
+  const OPENAI_RUNTIME_COST: RuntimeModelCost = {
+    input: 1.0,
+    output: 3.0,
+    cache: { read: 0.1, write: 0 },
+    // 运行时格式：opencode 把配置层 context_over_200k 转为 tiers / experimentalOver200K
+    experimentalOver200K: { input: 2.0, output: 5.0, cache: { read: 0.2, write: 0 } },
+  }
+
+  const ANTHROPIC_RUNTIME_COST: RuntimeModelCost = {
+    input: 3,
+    output: 15,
+    cache: { read: 0.3, write: 3.75 },
+    tiers: [
+      { input: 6, output: 30, cache: { read: 0.6, write: 7.5 }, tier: { type: "context", size: 100_000 } },
+    ],
+  }
+
   const RUNTIME_PROVIDERS: ProviderInfo[] = [
     {
       id: "openai",
       models: {
-        "gpt-5.6": {
-          cost: {
-            input: 1.0,
-            output: 3.0,
-            cache: { read: 0.1, write: 0 },
-            // 运行时格式：opencode 把配置层 context_over_200k 转为 tiers / experimentalOver200K
-            experimentalOver200K: { input: 2.0, output: 5.0, cache: { read: 0.2, write: 0 } },
-          },
-        },
+        "gpt-5.6": { cost: OPENAI_RUNTIME_COST },
       },
     },
     {
       id: "anthropic",
       models: {
-        "claude-x": {
-          cost: {
-            input: 3,
-            output: 15,
-            cache: { read: 0.3, write: 3.75 },
-            tiers: [
-              { input: 6, output: 30, cache: { read: 0.6, write: 7.5 }, tier: { type: "context", size: 100_000 } },
-            ],
-          },
-        },
+        "claude-x": { cost: ANTHROPIC_RUNTIME_COST },
       },
     },
   ]

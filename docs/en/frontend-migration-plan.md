@@ -1,6 +1,7 @@
 # Frontend Migration: session.get() Aggregates
 
 > **Historical status:** The `session.get()` migration described here is no longer the primary source for main-session interactive metrics. The cache-lineage implementation now requests direct main-session messages with `limit: 10000`, filters summary and compaction calls, and uses `session.get()` as a fallback for snapshot and child-session data. See [design.md](./design.md).
+> **Event names:** Written in the V1 era (`message.updated`, `message.part.updated`); current names and the V1/V2 mapping: [design.md § Event mapping](./design.md#event-mapping).
 
 ## Overview
 

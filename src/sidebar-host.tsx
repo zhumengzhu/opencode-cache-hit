@@ -1,22 +1,17 @@
 /** @jsxImportSource @opentui/solid */
 import { createSignal, createMemo, createEffect, onCleanup, untrack } from "solid-js"
 import { CacheHitSidebar } from "./widget.tsx"
-import type { DisplayConfig, TimelineConfig, CacheTTLConfig, DynamicPricingConfig } from "./plugin-config.ts"
 import { isToolSummaryEnabled } from "./plugin-config.ts"
+import { createCostFormatter, createRateFormatter } from "./format-cost.ts"
 import { createTimelineCollector } from "./timeline/collector.ts"
 import {
   createFirstPartTimeTracker,
   earliestPartStart,
   STREAM_PART_TYPES,
 } from "./first-part-time.ts"
-import { createToolTimingTracker, type ToolPartEventData } from "./tool-timing.ts"
+import { createToolTimingTracker } from "./tool-timing.ts"
 import { createItlTracker } from "./itl-tracker.ts"
-import { isPartUpdatedEvent } from "./types.ts"
-import type {
-  AssistantMessage,
-  OpenCodeTuiApi,
-  SubAgentSummary,
-} from "./types.ts"
+import type { AssistantMessage, SubAgentSummary, TuiApi } from "./types.ts"
 import { loadSessionMessages, type SessionMessageLoadStatus } from "./session-messages.ts"
 import {
   emptySessionSnapshot,
@@ -38,7 +33,7 @@ import {
 } from "./streaming-state.ts"
 
 /**
- * Session-scoped sidebar host. Bumps `refreshTick` on message.updated
+ * Session-scoped sidebar host. Bumps `refreshTick` on message and tick events
  * so memos re-compute.
  *
  * Where available, session.get() provides DB-level aggregate cost/tokens
@@ -47,18 +42,12 @@ import {
  * When absent, the code falls back to session.messages(), which is limited
  * to the most recent 100 messages per call.
  *
- * Timeline writes are event-driven: message.updated → handleMessage → appendFile.
+ * Timeline writes are event-driven: message → handleMessage → appendFile.
  */
 export function CacheHitSidebarHost(props: {
   sessionId: string
   theme: Record<string, unknown>
-  display: DisplayConfig
-  timeline: TimelineConfig
-  cacheTTL: CacheTTLConfig
-  dynamicPricing: DynamicPricingConfig
-  formatCost: (amount: number) => string
-  formatRate: (perMillion: number) => string
-  api: OpenCodeTuiApi
+  api: TuiApi
 }) {
   const [refreshTick, setRefreshTick] = createSignal(0)
   const [childIds, setChildIds] = createSignal<string[]>([])
@@ -77,6 +66,11 @@ export function CacheHitSidebarHost(props: {
   const cacheTTL = createMemo(() => runtimeConfig().cacheTTL)
   const dynamicPricing = createMemo(() => runtimeConfig().dynamicPricing)
   const timelineConfig = createMemo(() => runtimeConfig().timeline)
+  /** Currency formatting lives with the config it derives from, so cost edits reload like the rest. */
+  const formatters = createMemo(() => {
+    const cost = runtimeConfig().cost
+    return { formatCost: createCostFormatter(cost), formatRate: createRateFormatter(cost) }
+  })
 
   const bumpRefresh = () => setRefreshTick((v) => v + 1)
 
@@ -102,7 +96,6 @@ export function CacheHitSidebarHost(props: {
 
   const childSync = createChildSessionSync({
     client: props.api.client.session,
-    getDirectory: () => props.api.state.path.directory,
     getParentId: () => props.sessionId,
     setChildIds,
     setChildEntries,
@@ -121,21 +114,19 @@ export function CacheHitSidebarHost(props: {
     if (session) {
       const snap = aggregateFromSessionObject(session)
       if (mainSessionHasStats(snap)) {
-        const msgs = props.api.state.session.messages(sid) as AssistantMessage[] | undefined
+        const msgs = props.api.state.session.messages(sid)
         return msgs ? withModelFallback(snap, msgs) : snap
       }
     }
     const msgs = props.api.state.session.messages(sid)
-    return msgs?.length
-      ? aggregateSessionFromMessages(msgs as AssistantMessage[])
-      : emptySessionSnapshot()
+    return msgs?.length ? aggregateSessionFromMessages(msgs) : emptySessionSnapshot()
   })
 
   const mainMessages = createMemo(() => {
     void refreshTick()
     const sid = props.sessionId
     if (!sid) return [] as AssistantMessage[]
-    return (props.api.state.session.messages(sid) ?? []) as AssistantMessage[]
+    return props.api.state.session.messages(sid) ?? []
   })
 
   const mergeHistoryMessage = (messages: readonly AssistantMessage[], update: AssistantMessage) => {
@@ -161,7 +152,6 @@ export function CacheHitSidebarHost(props: {
     void loadSessionMessages({
       client: props.api.client.session,
       sessionId: sid,
-      directory: props.api.state.path.directory,
       fallback: mirror,
     }).then((result) => {
       if (generation !== historyLoadGeneration) return
@@ -185,7 +175,7 @@ export function CacheHitSidebarHost(props: {
         if (session) {
           const snap = aggregateFromSessionObject(session)
           if (subAgentHasStats(snap)) {
-            const msgs = props.api.state.session.messages(cid) as AssistantMessage[] | undefined
+            const msgs = props.api.state.session.messages(cid)
             const merged = msgs ? withModelFallback(snap, msgs) : snap
             const speed = msgs
               ? (useTps ? computeAvgTokenSpeed(msgs) || undefined : computeAvgTokenTpotMs(msgs))
@@ -195,11 +185,9 @@ export function CacheHitSidebarHost(props: {
         }
         const msgs = props.api.state.session.messages(cid)
         if (!msgs?.length) return null
-        const snap = aggregateSessionFromMessages(msgs as AssistantMessage[])
+        const snap = aggregateSessionFromMessages(msgs)
         if (!subAgentHasStats(snap)) return null
-        const speed = useTps
-          ? computeAvgTokenSpeed(msgs as AssistantMessage[]) || undefined
-          : computeAvgTokenTpotMs(msgs as AssistantMessage[])
+        const speed = useTps ? computeAvgTokenSpeed(msgs) || undefined : computeAvgTokenTpotMs(msgs)
         return toSubAgentSummary(cid, snap, speed, created)
       })
       .filter(Boolean) as SubAgentSummary[]
@@ -234,7 +222,6 @@ export function CacheHitSidebarHost(props: {
     const msgID = msg.id ?? msg.messageID
     const created = msg.time?.created
     if (!msgID || typeof created !== "number" || firstPartTracker.get().has(msgID)) return
-    if (!props.api.state.part) return
     const start = earliestPartStart(props.api.state.part(msgID), created)
     if (start !== undefined) {
       recordPart(msgID, "text", start, "sdk")
@@ -282,15 +269,15 @@ export function CacheHitSidebarHost(props: {
   })
 
   createEffect(() => {
-    const unsub = props.api.event.on("message.updated", (event) => {
+    const unsub = props.api.event.on("message", (event) => {
       bumpRefresh()
-      const msg = event.properties?.info as (AssistantMessage & { sessionID?: string }) | undefined
-      const sid = msg?.sessionID
+      const msg = event.info
+      const sid = msg.sessionID
       childSync.onForeignSessionActivity(sid)
-      if (msg?.role === "assistant") {
+      if (msg.role === "assistant") {
         seedTtftFromParts(msg)
       }
-      if (sid && msg) {
+      if (sid) {
         if (sid === props.sessionId && msg.role === "assistant") {
           pendingHistoryUpdates.set(msg.id ?? msg.messageID ?? String(msg.time?.created ?? Date.now()), msg)
           setHistoryMessages((messages) => mergeHistoryMessage(messages, msg))
@@ -298,13 +285,16 @@ export function CacheHitSidebarHost(props: {
         timeline.handleMessage(sid, msg)
       }
     })
-    onCleanup(() => unsub?.())
+    const unsubTick = props.api.event.on("tick", () => bumpRefresh())
+    onCleanup(() => {
+      unsub()
+      unsubTick()
+    })
   })
 
   createEffect(() => {
-    const unsub1 = props.api.event.on("message.part.updated", (event) => {
-      if (!isPartUpdatedEvent(event)) return
-      const { part } = event.properties
+    const unsub1 = props.api.event.on("part", (event) => {
+      const part = event.part
       if (STREAM_PART_TYPES.has(part.type) && typeof part.time?.start === "number") {
         const recorded = recordPart(part.messageID, part.type, part.time.start, "sdk")
         if (recorded) trackStreaming()
@@ -315,30 +305,26 @@ export function CacheHitSidebarHost(props: {
       // parts take priority via the tracker's existing upgrade logic.
       // Only fire if the tool part has no SDK time.start (avoid redundant call when
       // the part already carried a valid timestamp and was handled by the branch above).
+      // `pending` reaches this path only from V1: the V2 adapter emits running/completed/error.
       if (part.type === "tool" && !part.time?.start && part.state?.status === "pending") {
         const recorded = recordPart(part.messageID, "tool", Date.now(), "tui")
         if (recorded) trackStreaming()
       }
       if (part.type === "tool") {
-        toolTiming.handleToolPart(part.messageID, part as ToolPartEventData)
+        toolTiming.handleToolPart(part.messageID, part)
       }
     })
-    const unsub2 = props.api.event.on("message.part.delta", (event) => {
-      const props_ = event.properties
-      const messageID = props_?.messageID
-      const field = props_?.field
+    const unsub2 = props.api.event.on("delta", (event) => {
       // `Date.now()` is the event-handler arrival time, not the true network-first-byte time.
       // It may lag by tens to hundreds of ms under UI thread pressure; used only as a
-      // fallback when SDK-side part.time.start is unavailable (message.part.updated).
-      if (typeof messageID === "string" && typeof field === "string" && STREAM_PART_TYPES.has(field)) {
-        const recorded = recordPart(messageID, field, Date.now(), "tui")
-        itlTracker.trackChunk(messageID)
-        if (recorded) trackStreaming()
-      }
+      // fallback when SDK-side part.time.start is unavailable (part events).
+      const recorded = recordPart(event.messageID, event.field, Date.now(), "tui")
+      itlTracker.trackChunk(event.messageID)
+      if (recorded) trackStreaming()
     })
     onCleanup(() => {
-      unsub1?.()
-      unsub2?.()
+      unsub1()
+      unsub2()
     })
   })
 
@@ -354,9 +340,9 @@ export function CacheHitSidebarHost(props: {
       metricMessageStatus={() => historyStatus()}
       main={mainSnap}
       subAgents={subAgentList}
-      providers={() => props.api.state.provider ?? []}
-      formatCost={props.formatCost}
-      formatRate={props.formatRate}
+      providers={() => props.api.state.provider}
+      formatCost={(amount) => formatters().formatCost(amount)}
+      formatRate={(perMillion) => formatters().formatRate(perMillion)}
       streamingNow={streamingNow}
       firstPartTime={firstPartTime}
     />

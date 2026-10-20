@@ -28,7 +28,7 @@ OpenCode TUI sidebar plugin: **cache hit rate**, **tokens**, **cost**, with **su
 
 ```bash
 bun test          # full unit + module-load smoke
-bun run check     # same as test
+bun run check     # bun test + tsc --noEmit (type-check via tsconfig.json)
 bun run build     # emit dist/tui.js (the published ./tui entry)
 ```
 
@@ -63,8 +63,13 @@ After moving or renaming exports: run full `bun test`; `tests/module-load.test.t
 ## OpenCode integration
 
 - Entry: [index.tsx](index.tsx) → [src/plugin.tsx](src/plugin.tsx), built to `dist/tui.js` for `exports["./tui"]`.
-- Slot: `sidebar_content`, `order: 56` (near visual-cache).
-- Peers: `@opencode-ai/plugin`, `@opencode-ai/sdk`, `@opentui/solid`, `solid-js` (see [package.json](package.json)).
+- Dual entrypoint: that module default-exports `{ id, tui, setup }`. V1's TUI loader takes `tui(api)`, V2's CLI loader takes `setup(ctx)`. Never add `server` (V1 rejects `server`+`tui` together) and never runtime-import `@opencode/plugin` — V1 does not substitute that specifier, so the bundle must stay free of it. Since 1.0.0 only the V2 path is officially supported and tested: V1 bundles OpenTUI 0.4.5, below the peer floor, so the V1 `tui` path is best-effort (kept for backward compatibility; no V1 testing or V1-specific fixes).
+- V2 adapter: [src/v2/adapter.ts](src/v2/adapter.ts) maps the V2 context and events onto the internal `TuiApi` / `TuiEvent` contract in [src/types.ts](src/types.ts), so stats/pricing/timeline/rendering stay shared by both versions. Pure mapping lives in [src/v2/map.ts](src/v2/map.ts); the V2 surface is hand-written in [src/v2/types.ts](src/v2/types.ts) (no `@opencode/plugin` dependency). V1's legacy `{ properties }` payloads are mapped onto the same contract in [src/v1-map.ts](src/v1-map.ts), so no downstream module needs to know the running version.
+- `exports["."]` is the V2 server entry ([src/v2/server.ts](src/v2/server.ts)): a no-op that keeps the package loadable from `opencode.json`, so V2 reports `features.tui` and the CLI mounts the sidebar. The root `server.ts` shim makes this the file V1's `./server` probe resolves for package-name installs; it exports no `server()` function, so V1's server loader rejects it. V1 TUI installs (`tui.json`) resolve `exports["./tui"]` and are unaffected.
+- Slots: V1 `sidebar_content` (order 56), V2 `sidebar.content`.
+- Local directory installs: V2's `Host.resolve` looks for `<dir>/server` and `<dir>/tui`, and only falls back to `index.tsx` for the server path; `package.json` exports are used only when resolving by package name. The root `server.ts` / `tui.ts` shims keep `./plugins/opencode-cache-hit` working — without `tui.ts` the CLI reports the plugin as unsupported. Keep them in sync with `exports`.
+- Peers: `@opencode-ai/plugin`, `@opencode-ai/sdk`, `@opentui/core` (≥0.6.6), `@opentui/solid` (≥0.6.6), `solid-js` (see [package.json](package.json)).
+- **OpenTUI version alignment is load-bearing.** OpenCode 2 runs plugins on its bundled OpenTUI (`0.6.6` when this was written). OpenTUI keeps its env-var registry on a `globalThis` singleton and rejects a duplicate name registered with a different type, so a plugin built against pre-0.6 OpenTUI fails to load with `OPENTUI_FORCE_WCWIDTH ... already registered (string vs boolean)`. Keep the OpenTUI peers at `>=0.6.6` and re-verify when OpenCode bumps its bundled OpenTUI.
 
 ## Git / safety
 

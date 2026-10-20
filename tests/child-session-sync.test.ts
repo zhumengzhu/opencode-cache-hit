@@ -11,7 +11,6 @@ describe("createChildSessionSync", () => {
           { id: "b", parentID: "p" },
         ],
       },
-      getDirectory: () => "/proj",
       getParentId: () => "p",
       setChildIds: (next) => {
         ids = next
@@ -32,7 +31,6 @@ describe("createChildSessionSync", () => {
             resolveList = resolve
           }),
       },
-      getDirectory: () => "/proj",
       getParentId: () => "p",
       setChildIds: (next) => {
         ids = next
@@ -54,7 +52,6 @@ describe("createChildSessionSync", () => {
           return []
         },
       },
-      getDirectory: () => "/proj",
       getParentId: () => "p",
       setChildIds: () => {},
       debounceMs: 1000,

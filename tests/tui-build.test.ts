@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
 /**
@@ -97,26 +97,36 @@ describe("packaging contract", () => {
     // without writing a tarball. npm's pack is avoided on purpose: it needs a
     // writable ~/.npm cache. Deleting dist first proves the lifecycle — not a
     // stale artifact — is what puts the entry in the tarball.
+    //
+    // The delete is visible to a running opencode: a local-directory install
+    // resolves `tui.ts`, which re-exports `dist/tui.js`, so a reload during this
+    // window fails with ENOENT and the sidebar silently does not mount. Restore
+    // the bundle if the pack leaves it missing (a failing prepack).
+    const savedBundle = readFileSync(bundlePath)
     rmSync(bundlePath, { force: true })
     expect(existsSync(bundlePath)).toBe(false)
 
-    const pack = await run(["bun", "pm", "pack", "--dry-run"])
-    expect(pack.exitCode, `pack failed:\n${pack.stderr}`).toBe(0)
-    const packed = pack.stdout
-      .split("\n")
-      .map((line) => /^packed\s+\S+\s+(.+?)\s*$/.exec(line)?.[1])
-      .filter((value): value is string => Boolean(value))
+    try {
+      const pack = await run(["bun", "pm", "pack", "--dry-run"])
+      expect(pack.exitCode, `pack failed:\n${pack.stderr}`).toBe(0)
+      const packed = pack.stdout
+        .split("\n")
+        .map((line) => /^packed\s+\S+\s+(.+?)\s*$/.exec(line)?.[1])
+        .filter((value): value is string => Boolean(value))
 
-    // Guard the parser itself: a silent format change must fail loudly.
-    expect(packed.length).toBeGreaterThan(50)
-    expect(packed).toContain("dist/tui.js")
-    expect(existsSync(bundlePath)).toBe(true)
-    for (const [subpath, target] of Object.entries(pkg.exports)) {
-      expect(packed, `exports["${subpath}"] target is missing from the tarball`).toContain(
-        target.replace(/^\.\//, ""),
-      )
+      // Guard the parser itself: a silent format change must fail loudly.
+      expect(packed.length).toBeGreaterThan(50)
+      expect(packed).toContain("dist/tui.js")
+      expect(existsSync(bundlePath)).toBe(true)
+      for (const [subpath, target] of Object.entries(pkg.exports)) {
+        expect(packed, `exports["${subpath}"] target is missing from the tarball`).toContain(
+          target.replace(/^\.\//, ""),
+        )
+      }
+      expect(packed).toContain("index.tsx")
+      expect(packed.some((file) => file.startsWith("tests/"))).toBe(false)
+    } finally {
+      if (!existsSync(bundlePath)) writeFileSync(bundlePath, savedBundle)
     }
-    expect(packed).toContain("index.tsx")
-    expect(packed.some((file) => file.startsWith("tests/"))).toBe(false)
   }, 30_000)
 })

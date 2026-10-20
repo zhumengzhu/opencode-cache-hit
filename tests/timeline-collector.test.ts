@@ -263,7 +263,9 @@ describe("createTimelineCollector (event-driven)", () => {
       config: { ...DEFAULT_TIMELINE, enabled: true, logSummaryMessages: true },
       getRootSessionId: () => "r",
       getChildIds: () => [],
-      append: async (_p, rec) => appended.push(rec),
+      append: async (_p, rec) => {
+        appended.push(rec)
+      },
     })
     c.handleMessage("r", msg({ id: "compact", agent: "compaction" }))
     await new Promise((r) => setTimeout(r, 50))

@@ -2,6 +2,8 @@
 
 面向开发者。侧栏聚合见 [design.md](./design.md)。用户指南见 [README.zh-CN.md](../../README.zh-CN.md)。
 
+> **事件名**：本文使用插件内部事件契约（`src/types.ts` 的 `TuiEvent`）：`part` / `message` / `delta` / `tick`。OpenCode 1（`message.part.updated`、`message.updated` …）与 OpenCode 2（`session.text.started`、`session.step.ended` …）的源事件分别在 `v1-map.ts` / `v2/adapter.ts` 中映射到该契约，见 [design.md § 事件映射](./design.md#事件映射)。
+
 **Phase 1（JSONL 落盘）已实现**，默认 `timeline.enabled: false`。Phase 2 侧栏 Timeline 段、Phase 3 指标切换仍未做。
 
 ## 目标与非目标
@@ -37,6 +39,8 @@ flowchart LR
 /** 单条记录；JSONL 一行一个 */
 export type LlmCallRecord = {
   schema: 1
+  /** 写入者标识（本插件为 "opencode/<version>"；pi / dsh 共用同一目录） */
+  producer?: string
   /** 写入时间（ISO 8601，含时区），非 LLM 时间 */
   recordedAt: string
   /** 所属 session */
@@ -80,7 +84,7 @@ export type LlmCallRecord = {
 
 可选数组，记录该 assistant 轮次内已完成的 tool 调用。每个 tool 调用归属于触发它的 assistant 消息（按 `messageID` 匹配）。单条 assistant 消息可能触发多个 tool 调用（并行或串行），均记录在同一 `toolDurations` 数组中。
 
-来自 `message.part.updated` 中 tool part 的 `running → completed` 或 `running → error` 转换。当 timeline 未开启、本轮无 tool、或 part 事件丢失时省略（与 TTFT 不同，**无** `api.state.part()` 回填）。`summary` 字段受 `timeline.toolSummary` 配置控制。
+来自 `part` 事件中 tool part 的 `running → completed` 或 `running → error` 转换。当 timeline 未开启、本轮无 tool、或 part 事件丢失时省略（与 TTFT 不同，**无** `api.state.part()` 回填）。`summary` 字段受 `timeline.toolSummary` 配置控制。
 
 | 字段 | 说明 |
 |------|------|
@@ -117,9 +121,10 @@ export type LlmCallRecord = {
 
 捕获顺序（见 [ttft-hybrid.md](./ttft-hybrid.md)）：
 
-1. `message.part.updated` — `text` / `reasoning` 的 `part.time.start`（SDK）
-2. `message.part.delta` — 首个 `text` / `reasoning` 增量上的 `Date.now()`（TUI）
-3. `message.updated` — 仍缺失时扫描 `api.state.part()` 取最早有效 `time.start`
+1. `part` 事件 — `text` / `reasoning` 的 `part.time.start`（SDK）
+2. `delta` 事件 — 首个 `text` / `reasoning` 增量上的 `Date.now()`（TUI）
+3. `message` 事件 — 仍缺失时扫描 `api.state.part()` 取最早有效 `time.start`
+4. 仅 V2：在 `message` 之前，把 store 行里带时间的 part 重放成 `part` 事件——这是插件热重载打断流式时的兜底（语义同来源 1，只是晚到；text part 在 store 里不带时间）
 
 全部失败时（如本地模型无 parts）省略 `ttftMs` — 部分 provider 下的预期行为。
 
@@ -127,8 +132,8 @@ export type LlmCallRecord = {
 
 | 来源 | 描述 | 可靠性 |
 |------|------|--------|
-| `"sdk"` | `part.time.start` — SDK 收到首个流式 chunk 时的 `Date.now()`（来自 `message.part.updated` 或 `api.state.part()` 扫描） | ✅ 最精确（不含本地 IPC/事件循环延迟） |
-| `"tui"` | 首个 `message.part.delta` 的 `Date.now()` | ✅ BusEvent 正常投递时可用 |
+| `"sdk"` | `part.time.start` — SDK 收到首个流式 chunk 时的 `Date.now()`（来自 `part` 事件或 `api.state.part()` 扫描） | ✅ 最精确（不含本地 IPC/事件循环延迟） |
+| `"tui"` | 首个 `delta` 事件的 `Date.now()` | ✅ 宿主正常投递流式增量时可用 |
 
 **优先级逻辑**：优先 SDK 端；一旦已有 SDK 端记录则不被 TUI 端覆盖。无效时间戳（`start <= created`）会被丢弃。
 
@@ -148,7 +153,7 @@ export type LlmCallRecord = {
 
 > **前提：collector 只在侧边栏挂载期间存在。** 这条路径运行在 sidebar host 内部，所以当 OpenCode 不渲染侧边栏时（终端 ≤ 120 列且未用 `session.sidebar.toggle` 打开，或任何子 session 视图）**完全不会写入 JSONL**：没有记录，也没有报错——即使 `timeline.enabled: true`。见 README「兼容性」。
 
-1. `message.updated` 携带一条 assistant `Message`。
+1. `message` 事件携带一条 assistant `Message`。
 2. `handleMessage(sessionID, msg)` 判定 scope（`sessionID === root` 为 `main`，在 `childIds` 内为 `child`）。
 3. `src/timeline/records.ts` 的 `assistantMessageToRecord()` 生成一条 `LlmCallRecord`（TTFT 来自 `firstPartTime`，工具耗时来自 `toolTiming`）。
 4. `timeline.enabled` 且满足 flush 规则 → append 一行 JSONL。
@@ -241,7 +246,7 @@ export type LlmCallRecord = {
 1. 可选 `rotateMaxBytes`：写**前**若当日活跃文件 ≥ 阈值 → 链式 rename（见 § 轮转与清理）。
 2. `appendFile` 一行 JSON。
 3. 可选 `maxLinesPerFile`：写**后**读回活跃文件，只保留最后 N 行（**删行**，不生成 `.1`）。
-4. 事件驱动：`message.updated` → `handleMessage()` → fire-and-forget `appendFile`。无轮询，写入端也不去重：`flushIncomplete: true` 时同一 `messageKey` 每次流式 flush 都写一行。由**读取端**折叠——`timeline-dashboard.ts` 按 `messageKey` 保留最新一条，且不允许未完成行覆盖已完成行（`plot-hit-rate.ts` 不去重）。
+4. 事件驱动：`message` 事件 → `handleMessage()` → fire-and-forget `appendFile`。无轮询，写入端也不去重：`flushIncomplete: true` 时同一 `messageKey` 每次流式 flush 都写一行。由**读取端**折叠——`timeline-dashboard.ts` 按 `messageKey` 保留最新一条，且不允许未完成行覆盖已完成行（`plot-hit-rate.ts` 不去重）。
 
 ## 轮转与清理
 
@@ -283,21 +288,21 @@ export type LlmCallRecord = {
 
 ### 收集
 
-- `message.updated` 事件携带完整 `Message` 对象。collector 直接订阅事件——无轮询，写入端不去重（重复 `messageKey` 行在读取端折叠，见 § 写入流程）。
-- 切换主 session：`resetForRootChange()` 清空 collector 内存；`sidebar-host` 同时 `firstPartTime` / `toolTiming` reset；新 session 的事件自然到达。**`timeline` 配置**（含 `enabled`、`toolSummary`、`dir`）在切换主 session 时从 `cache-hit.json` 重读，与 `display` / `cacheTTL` 相同；同 session 内改配置且不切换 session 时需重载插件才生效。
+- `message` 事件携带完整 `Message` 对象。collector 直接订阅事件——无轮询，写入端不去重（重复 `messageKey` 行在读取端折叠，见 § 写入流程）。
+- 切换主 session：`resetForRootChange()` 清空 collector 内存；`sidebar-host` 同时 `firstPartTime` / `toolTiming` reset；新 session 的事件自然到达。**`timeline` 配置**（含 `enabled`、`toolSummary`、`dir`）在切换主 session 时从 `cache-hit.json` 重读，与 `display` / `cacheTTL` / `dynamicPricing` / `cost` 相同；同 session 内改配置且不切换 session 时需重载插件才生效。
 - 重启安全：启动前的消息已在上次 session 中写入 JSONL。无需回放，无需扫描。
 
 ## 运行时接入
 
 ```mermaid
 sequenceDiagram
-  participant E as message.updated
+  participant E as message event
   participant H as sidebar-host
   participant C as timeline/collector
   participant W as timeline/writer
 
-  E->>H: { sessionID, info: Message }
-  H->>C: handleMessage(sessionID, info)
+  E->>H: { info: AssistantMessage }
+  H->>C: handleMessage(info.sessionID, info)
   alt assistant and complete
     C->>W: append JSONL（fire-and-forget）
   end
@@ -335,6 +340,8 @@ bun scripts/timeline-dashboard.ts --open
 ```
 
 默认日志目录与插件 `timeline.dir` 一致（`~/.local/share/opencode/logs/cache-hit/`）。
+
+仪表盘的 Per-Call 表格新增 **Producer** 列与筛选器：`opencode/<version>`、`pi`、`dsh` 写入同一目录时仍可区分（没有该字段的旧记录显示为 `unknown`）。
 
 ### Phase 2 — 侧栏「Timeline」折叠段
 
@@ -393,7 +400,7 @@ bun scripts/timeline-dashboard.ts --open
 ## 示例 JSONL 行
 
 ```json
-{"schema":1,"recordedAt":"2024-05-30T08:00:00.000+08:00","sessionId":"sess_main","rootSessionId":"sess_main","scope":"main","messageKey":"sess_main:m1","modelId":"deepseek/v4","created":"2024-05-30T07:59:50.000+08:00","completedAt":"2024-05-30T08:00:00.000+08:00","durationMs":10000,"isComplete":true,"input":1200,"output":80,"reasoning":0,"cacheRead":38000,"cacheWrite":0,"cost":0.012,"hitPercent":96.9,"skippedForHit":false,"skippedForMetrics":false,"ttftMs":944,"ttftSource":"sdk","tps":8.83,"tpot":114.63,"itlP50":12,"itlP90":15,"itlCount":5,"finish":"stop"}
+{"schema":1,"producer":"opencode/1.0.0","recordedAt":"2024-05-30T08:00:00.000+08:00","sessionId":"sess_main","rootSessionId":"sess_main","scope":"main","messageKey":"sess_main:m1","modelId":"deepseek/v4","created":"2024-05-30T07:59:50.000+08:00","completedAt":"2024-05-30T08:00:00.000+08:00","durationMs":10000,"isComplete":true,"input":1200,"output":80,"reasoning":0,"cacheRead":38000,"cacheWrite":0,"cost":0.012,"hitPercent":96.9,"skippedForHit":false,"skippedForMetrics":false,"ttftMs":944,"ttftSource":"sdk","tps":8.83,"tpot":114.63,"itlP50":12,"itlP90":15,"itlCount":5,"finish":"stop"}
 ```
 
 ---

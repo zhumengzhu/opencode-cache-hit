@@ -295,6 +295,7 @@ tr:hover td{background:#1c2128}
 .pill-main{background:#1f6feb33;color:#58a6ff}
 .pill-child{background:#3fb95033;color:#3fb950}
 .pill-model{background:#8b949e22;color:#8b949e;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill-producer{background:#a371f733;color:#a371f7;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pill-mixed{background:#d2992233;color:#d29922}
 .dr{display:none}
 .dr td{padding:0}
@@ -327,6 +328,9 @@ tr:hover td{background:#1c2128}
 
   <label style="margin-left:8px">Scope</label>
   <select id="filterScope"><option value="all">All</option><option value="main">main</option><option value="child">child</option></select>
+
+  <label style="margin-left:8px">Producer</label>
+  <select id="filterProducer"><option value="all">All</option></select>
 
   <label style="margin-left:8px">Model</label>
   <select id="filterModel"><option value="all">All</option></select>
@@ -380,7 +384,7 @@ tr:hover td{background:#1c2128}
 <div class="table-wrap">
   <table id="detailTable">
     <thead><tr>
-      <th style="width:0"></th><th class="num" data-sort="created">Time</th><th data-sort="scope">Scope</th><th data-sort="session">Session</th><th data-sort="model">Model</th>
+      <th style="width:0"></th><th class="num" data-sort="created">Time</th><th data-sort="scope">Scope</th><th data-sort="producer">Producer</th><th data-sort="session">Session</th><th data-sort="model">Model</th>
       <th class="num" data-sort="input">Input</th><th class="num" data-sort="output">Output</th><th class="num" data-sort="cacheRead">CacheR</th><th class="num" data-sort="cacheWrite">CacheW</th>
       <th class="num" data-sort="hit">Hit%</th><th class="num" data-sort="cost">Cost</th><th class="num" data-sort="duration">Dur</th>
       <th class="num" data-sort="ttft">TTFT</th><th class="num" data-sort="tps">TPS</th><th class="num" data-sort="tpot">TPOT</th>
@@ -391,7 +395,7 @@ tr:hover td{background:#1c2128}
 
 <script>
 var RAW_DATA = TMPL_DATA
-var EXPAND_FIELDS = ["schema","recordedAt","sessionId","rootSessionId","scope","messageKey","modelId","created","completedAt","durationMs","isComplete","input","output","reasoning","cacheRead","cacheWrite","cost","hitPercent","skippedForHit","skippedForMetrics","ttftMs","ttftSource","tps","tpot","itlP50","itlP90","itlCount","finish","toolDurations"]
+var EXPAND_FIELDS = ["schema","producer","recordedAt","sessionId","rootSessionId","scope","messageKey","modelId","created","completedAt","durationMs","isComplete","input","output","reasoning","cacheRead","cacheWrite","cost","hitPercent","skippedForHit","skippedForMetrics","ttftMs","ttftSource","tps","tpot","itlP50","itlP90","itlCount","finish","toolDurations"]
 
 function fmtTtft(ms) { if (ms == null) return "-"; return ms < 1000 ? ms + "ms" : (ms / 1000).toFixed(1) + "s" }
 function fmtTps(v) { if (v == null) return "-"; return Math.round(v) + " tok/s" }
@@ -512,7 +516,10 @@ function renderSummary(data) {
 function updateSubtitle(data) {
   var sessions = [...new Set(data.map(function(r){return r.rootSessionId}).filter(Boolean))]
   var models = [...new Set(data.map(function(r){return r.modelId}).filter(Boolean))]
-  document.getElementById("subtitle").textContent = data.length + " records (filtered), " + sessions.length + " sessions" + (models.length?", "+models.join(", "):"")
+  var producers = [...new Set(data.map(function(r){return r.producer || "unknown"}))]
+  document.getElementById("subtitle").textContent = data.length + " records (filtered), " + sessions.length + " sessions" +
+    (producers.length > 1 ? ", " + producers.join(" + ") : "") +
+    (models.length?", "+models.join(", "):"")
 }
 
 function setFullDateRange() {
@@ -525,10 +532,13 @@ function setFullDateRange() {
 function populateFilters() {
   var sessions = [...new Set(RAW_DATA.filter(function(r){return r.rootSessionId}).map(function(r){return r.rootSessionId}))].sort()
   var models = [...new Set(RAW_DATA.filter(function(r){return r.modelId}).map(function(r){return r.modelId}))].sort()
+  var producers = [...new Set(RAW_DATA.map(function(r){return r.producer || "unknown"}))].sort()
   var selS = document.getElementById("filterSession")
   sessions.forEach(function(s){ var o=document.createElement("option"); o.value=s; o.textContent=shortSession(s); selS.appendChild(o) })
   var selM = document.getElementById("filterModel")
   models.forEach(function(m){ var o=document.createElement("option"); o.value=m; o.textContent=m; selM.appendChild(o) })
+  var selP = document.getElementById("filterProducer")
+  producers.forEach(function(p){ var o=document.createElement("option"); o.value=p; o.textContent=p; selP.appendChild(o) })
   if (RAW_DATA.length > 0) {
     setFullDateRange()
   }
@@ -540,6 +550,7 @@ function getFilteredData() {
   var dt = document.getElementById("filterDateTo").value
   var sess = document.getElementById("filterSession").value
   var sc = document.getElementById("filterScope").value
+  var prod = document.getElementById("filterProducer").value
   var mdl = document.getElementById("filterModel").value
   var q = document.getElementById("filterSearch").value.toLowerCase()
   return RAW_DATA.filter(function(r){
@@ -548,6 +559,7 @@ function getFilteredData() {
     if (dt && d>dt) return false
     if (sess!=="all" && r.rootSessionId!==sess) return false
     if (sc!=="all" && r.scope!==sc) return false
+    if (prod!=="all" && (r.producer||"unknown")!==prod) return false
     if (mdl!=="all" && r.modelId!==mdl) return false
     if (q) {
       var mk = (r.messageKey || "").toLowerCase()
@@ -718,10 +730,11 @@ function expandDetailGrid(r) {
 
 /* Per-call sorting: a header click re-sorts, and the table shows the first N rows in that order. */
 var DETAIL_SORT = { key: "created", dir: -1 }
-var DETAIL_TEXT_KEYS = { scope:1, session:1, model:1 }
+var DETAIL_TEXT_KEYS = { scope:1, producer:1, session:1, model:1 }
 var DETAIL_SORT_VALUE = {
   created: function(r){ return Date.parse(r.created) || 0 },
   scope: function(r){ return r.scope || "" },
+  producer: function(r){ return r.producer || "" },
   session: function(r){ return r.rootSessionId || "" },
   model: function(r){ return r.modelId || "" },
   input: function(r){ return r.input },
@@ -780,6 +793,7 @@ function renderDetailTable(data) {
       '<td style="cursor:pointer;color:#8b949e;text-align:center;font-size:16px;user-select:none">'+(open?"&#9660;":"&#9654;")+'</td>'+
       '<td class="num">'+esc(r.created.slice(0,19).replace("T"," "))+'</td>'+
       '<td><span class="pill '+scopePillClass(r.scope)+'">'+esc(r.scope)+'</span></td>'+
+      '<td><span class="pill pill-producer">'+esc(r.producer||"unknown")+'</span></td>'+
       '<td style="max-width:120px;overflow:hidden;text-overflow:ellipsis" title="'+esc(r.rootSessionId||"")+'">'+esc(shortId)+'</td>'+
       '<td><span class="pill pill-model">'+esc(r.modelId||"-")+'</span></td>'+
       '<td class="num">'+r.input.toLocaleString()+'</td>'+
@@ -793,7 +807,7 @@ function renderDetailTable(data) {
       '<td class="num">'+fmtTps(r.tps)+'</td>'+
       '<td class="num">'+fmtTpot(r.tpot)+'</td>'+
     '</tr>'+
-    '<tr class="dr'+(open?" open":"")+'" data-key="'+esc(key)+'"><td colspan="15"><div class="detail-inner"><div class="detail-grid">'+expandDetailGrid(r)+'</div></div></td></tr>'
+    '<tr class="dr'+(open?" open":"")+'" data-key="'+esc(key)+'"><td colspan="16"><div class="detail-inner"><div class="detail-grid">'+expandDetailGrid(r)+'</div></div></td></tr>'
   }).join("")
 }
 
@@ -829,6 +843,7 @@ document.getElementById("filterDateFrom").addEventListener("change", refresh)
 document.getElementById("filterDateTo").addEventListener("change", refresh)
 document.getElementById("filterSession").addEventListener("change", refresh)
 document.getElementById("filterScope").addEventListener("change", refresh)
+document.getElementById("filterProducer").addEventListener("change", refresh)
 document.getElementById("filterModel").addEventListener("change", refresh)
 document.getElementById("filterSearch").addEventListener("input", function(){
   clearTimeout(searchTimer)
@@ -860,6 +875,7 @@ document.querySelectorAll(".tip-trigger").forEach(function(el){
 document.getElementById("filterReset").addEventListener("click", function(){
   document.getElementById("filterSession").value = "all"
   document.getElementById("filterScope").value = "all"
+  document.getElementById("filterProducer").value = "all"
   document.getElementById("filterModel").value = "all"
   document.getElementById("filterSearch").value = ""
   setFullDateRange()

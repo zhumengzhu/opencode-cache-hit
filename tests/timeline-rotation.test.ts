@@ -14,13 +14,13 @@ import type { LlmCallRecord } from "../src/timeline/types.ts"
 
 const baseRecord = (): LlmCallRecord => ({
   schema: 1,
-  recordedAt: 1,
+  recordedAt: "1970-01-01T00:00:00.001Z",
   sessionId: "s",
   rootSessionId: "s",
   scope: "main",
   messageKey: "s:k",
   modelId: "",
-  created: 1,
+  created: "1970-01-01T00:00:00.001Z",
   isComplete: true,
   input: 0,
   output: 0,

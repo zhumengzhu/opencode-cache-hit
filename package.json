@@ -1,6 +1,6 @@
 {
   "name": "opencode-cache-hit",
-  "version": "0.7.6",
+  "version": "1.0.0",
   "description": "OpenCode TUI sidebar: prompt cache hit rate, tokens & cost with sub-agent rollup. Works with opencode-visual-cache; optional per-call JSONL timeline.",
   "type": "module",
   "license": "MIT",
@@ -30,12 +30,14 @@
     "timeline"
   ],
   "exports": {
-    ".": "./index.tsx",
+    ".": "./src/v2/server.ts",
     "./tui": "./dist/tui.js",
     "./tui-panel": "./src/tui-panel/index.ts"
   },
   "files": [
     "index.tsx",
+    "server.ts",
+    "tui.ts",
     "src",
     "dist",
     "cache-hit.config.example.json",
@@ -50,16 +52,16 @@
   ],
   "scripts": {
     "test": "bun test tests/",
-    "check": "bun test tests/",
+    "check": "bun run test && tsc --noEmit",
     "syntax": "bun test tests/module-load.test.ts",
     "build": "bun run scripts/build-tui.ts",
     "hooks": "simple-git-hooks",
     "prepack": "bun run build",
-    "prepublishOnly": "bun test tests/",
+    "prepublishOnly": "bun run check",
     "prepare": "bun run build && bun run hooks"
   },
   "simple-git-hooks": {
-    "pre-push": "bun test tests/"
+    "pre-push": "bun run check"
   },
   "dependencies": {
     "solid-js": "^1.9.0"
@@ -67,11 +69,14 @@
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.14.0",
     "@opencode-ai/sdk": ">=1.14.0",
-    "@opentui/core": ">=0.2.0",
-    "@opentui/solid": ">=0.2.0"
+    "@opentui/core": ">=0.6.6",
+    "@opentui/solid": ">=0.6.6"
   },
   "devDependencies": {
-    "@opentui/solid": "^0.4.5",
-    "simple-git-hooks": "^2.13.1"
+    "@opentui/solid": "^0.6.6",
+    "@types/bun": "^1.4.3",
+    "@types/node": "^26.6.5",
+    "simple-git-hooks": "^2.13.1",
+    "typescript": "^7.0.2"
   }
 }

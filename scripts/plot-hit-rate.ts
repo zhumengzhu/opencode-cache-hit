@@ -221,3 +221,6 @@ if (useByRoot) {
     console.log("tip: -o /tmp/hit.svg | --by-root for multi-session chart")
   }
 }
+
+// Keeps this file a module so tsc accepts its top-level await (Bun runs it either way).
+export {}

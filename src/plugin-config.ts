@@ -22,7 +22,7 @@ export type DisplayConfig = {
   agentsBorder?: boolean
   /** Show token speed section. Default true. */
   showSpeed: boolean
-  /** Speed display unit. Default "tpot". */
+  /** Speed display unit. Default "tps". */
   speedUnit: "tpot" | "tps"
 }
 
@@ -30,7 +30,7 @@ export const DEFAULT_DISPLAY: DisplayConfig = {
   lang: "en",
   panelBorder: true,
   showSpeed: true,
-  speedUnit: "tpot",
+  speedUnit: "tps",
 }
 
 export type ToolSummaryConfig = {
@@ -320,7 +320,7 @@ function normalizeSchedule(raw: unknown): DynamicPricingSchedule {
       continue
     }
     const windows = o.windows
-      .map((w) => {
+      .map((w): TimeWindow | null => {
         const ww = w as Record<string, unknown> | undefined
         if (!ww || typeof ww !== "object") return null
         const start = typeof ww.start === "string" ? parseClockTime(ww.start) : null

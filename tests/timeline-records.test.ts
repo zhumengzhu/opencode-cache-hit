@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { messageKeyFor, assistantMessageToRecord } from "../src/timeline/records.ts"
+import { PLUGIN_VERSION } from "../src/version.ts"
 
 describe("messageKeyFor", () => {
   test("prefers id", () => {
@@ -19,6 +20,17 @@ describe("messageKeyFor", () => {
 })
 
 describe("assistantMessageToRecord", () => {
+  test("identifies the writer so shared log directories stay attributable", () => {
+    const rec = assistantMessageToRecord(
+      { role: "assistant", id: "m1", time: { created: 1000, completed: 2000 } },
+      "s1",
+      "s1",
+      "main",
+      3000,
+    )
+    expect(rec?.producer).toBe(`opencode/${PLUGIN_VERSION}`)
+  })
+
   test("calculates TTFT when firstPartTime provided", () => {
     const msg = {
       role: "assistant",

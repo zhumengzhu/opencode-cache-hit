@@ -51,7 +51,7 @@ export function CacheTTLView(props: {
 
   const elapsed = createMemo(() => {
     const m = lastCache()
-    if (!m || m.time.completed === undefined) return null
+    if (!m || m.time?.completed === undefined) return null
     return now() - m.time.completed
   })
 
@@ -67,7 +67,7 @@ export function CacheTTLView(props: {
   const statusColor = createMemo(() => {
     const e = elapsed()
     const ttl = ttlMs()
-    if (e === null) return props.pal.textMuted
+    if (e === null) return props.pal.muted
     if (e < ttl) return props.pal.success
     if (e < ttl * 2) return props.pal.warning
     return props.pal.error

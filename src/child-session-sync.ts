@@ -1,11 +1,11 @@
 import { childSessionEntriesForParent, parseSessionListResponse, type SessionListEntry } from "./session-list.ts"
-import type { OpenCodeTuiApi } from "./types.ts"
+import type { TuiApi } from "./types.ts"
 
-/** Debounce for session.list after foreign-session message.updated (streaming fires often). */
+/** Debounce for session.list after foreign-session message activity (streaming fires often). */
 export const CHILD_LIST_DEBOUNCE_MS = 200
 
 /** Pass `api.client.session`, never `api.client`. */
-export type ChildSessionListClient = OpenCodeTuiApi["client"]["session"]
+export type ChildSessionListClient = TuiApi["client"]["session"]
 
 /**
  * Keeps child session ids in sync with session.list for a single parent session.
@@ -14,7 +14,6 @@ export type ChildSessionListClient = OpenCodeTuiApi["client"]["session"]
  */
 export function createChildSessionSync(opts: {
   client: ChildSessionListClient
-  getDirectory: () => string
   getParentId: () => string
   setChildIds: (ids: string[]) => void
   onSynced?: () => void
@@ -39,9 +38,8 @@ export function createChildSessionSync(opts: {
       return
     }
     const gen = listGen
-    const directory = opts.getDirectory()
     opts.client
-      .list({ query: { directory } })
+      .list()
       .then(
         (all) => {
           if (gen !== listGen || opts.getParentId() !== parentId) return

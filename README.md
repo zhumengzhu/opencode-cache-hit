@@ -4,6 +4,9 @@
 
 OpenCode **TUI sidebar plugin** for prompt **cache hit rate**, **token usage**, and **cost**—with first-class **sub-agent (child session)** rollup. **Standalone by default** (main + sub-agents in one panel). Optional coexistence with [opencode-visual-cache](https://www.npmjs.com/package/opencode-visual-cache).
 
+> [!IMPORTANT]
+> **1.0.0 is the first stable OpenCode 2 release and requires bundled OpenTUI `>=0.6.6`.** OpenCode 1 is **no longer officially supported**: the V1 entrypoint stays in the bundle and may still work, but it is best-effort and untested. Pin `0.7.x` if you still run OpenCode 1.
+
 **Languages:** English (this file) · [简体中文](README.zh-CN.md) · [Documentation](docs/README.md)
 
 ![Cache Hit sidebar panel](docs/assets/cache-hit-panel.v4.png)
@@ -66,7 +69,15 @@ The **tool-part TTFT fallback** (capturing `tool.pending` as first-response time
 
 `Ctrl+P` → type **install plugin** → press `Tab` to switch scope to **global** (default is local) → type `opencode-cache-hit@latest` → press Enter.
 
-Global plugins install to `~/.cache/opencode/packages/opencode-cache-hit@latest/`. Create config at `~/.config/opencode/cache-hit.json`:
+Global plugins install to `~/.cache/opencode/packages/opencode-cache-hit@latest/`. Create config at `~/.config/opencode/cache-hit.json` (all fields are optional):
+
+```jsonc
+{
+  "currency": "CNY",
+  "costUnit": "USD",
+  "rate": 6.77
+}
+```
 
 ### Option B: Manual
 
@@ -79,7 +90,30 @@ Create or edit `~/.config/opencode/tui.json` / `tui.jsonc`:
 }
 ```
 
-Local development: use an absolute path to the checkout, such as `"/path/to/opencode-cache-hit"`, instead of the npm name. OpenCode loads the package root and its `index.tsx` entry.
+Local development: use an absolute path to the checkout, such as `"/path/to/opencode-cache-hit"`, instead of the npm name. V2 resolves `<dir>/server` and `<dir>/tui` for directory installs; the root `server.ts` and `tui.ts` shims cover those paths, and `tui.ts` re-exports the built `dist/tui.js`, so run `bun run build` first (`prepare` does it automatically on install). V1 resolves `exports["./tui"]`, falling back to the package root's `index.tsx`.
+
+### OpenCode 2
+
+V2 no longer reads `tui.json`: list the plugin under `plugins` in `opencode.json` (or in CLI-only `cli.json`), and the CLI loads the TUI component automatically. `cache-hit.json`, the sidebar, and the JSONL timeline behave identically.
+
+```jsonc
+// ~/.config/opencode/opencode.json
+{
+  "plugins": ["opencode-cache-hit@latest"]
+}
+```
+
+For the rest of the move to V2 (plugin API, server API, `tui.json` → `cli.json`), see the [V2 migration guide](https://opencode.ai/v2/docs/migrate-v1).
+
+V2 runs plugins on the **OpenTUI runtime bundled with OpenCode**, so the package requires **OpenTUI `>=0.6.6`** (see peers in `package.json`). A plugin built against an older OpenTUI fails to load with a duplicate `OPENTUI_FORCE_WCWIDTH` environment-variable error. The no-op `exports["."]` server entry keeps the package loadable from `opencode.json`, which makes V2 report `features.tui` and mount the sidebar.
+
+For a local checkout (or an unreleased branch), point `plugins` at the directory instead of the npm name, then **fully restart** OpenCode:
+
+```jsonc
+{
+  "plugins": ["./plugins/opencode-cache-hit"]
+}
+```
 
 Copy `cache-hit.config.example.json` → `~/.config/opencode/cache-hit.json` (recommended) or next to the plugin root. **Restart OpenCode** after changing plugin code or config.
 
@@ -121,7 +155,7 @@ Supported display currencies in config: `USD`, `CNY`, `EUR`, `GBP`, `JPY` (see `
   "lang": "en",
   "panelBorder": true,
   "showSpeed": true,
-  "speedUnit": "tpot"
+  "speedUnit": "tps"
 }
 ```
 
@@ -131,7 +165,10 @@ Supported display currencies in config: `USD`, `CNY`, `EUR`, `GBP`, `JPY` (see `
 | `panelBorder` | `true` | Border/padding |
 | `mainHitLabel` | (i18n) | Optional override for the Hit row label |
 | `showSpeed` | `true` | Show/hide speed section |
-| `speedUnit` | `"tpot"` | `"tpot"` (ms/tok) or `"tps"` (tok/s) |
+| `speedUnit` | `"tps"` | `"tps"` (tok/s) or `"tpot"` (ms/tok) |
+
+> [!NOTE]
+> **Changed in 1.0.0:** `display.speedUnit` now defaults to `"tps"` (was `"tpot"` in 0.x). Set `"speedUnit": "tpot"` explicitly to keep the old unit.
 
 **Agents** totals sum **child sessions only**, not the main session (see `agentsScopeHint`). Main session metrics stay in the block above; collapse **Agents** to save space. Per-child rows use the same model slug as the main **Model** line (truncated when the sidebar is narrow); see [docs/en/design.md](docs/en/design.md) § Sub-agent row display.
 
@@ -141,7 +178,7 @@ The main Hit, Total Hit, and cost values use the DB-level session aggregate when
 
 The plugin excludes assistant messages with `summary: true` or `agent: "compaction"` from interactive metrics. Timeline JSONL keeps these rows when `timeline.logSummaryMessages` is enabled and marks them with `skippedForMetrics: true`.
 
-The plugin requests main-session history directly with a limit of 10,000 messages. When that request fails and the mirror has filled its 100-message cap, or the returned history reaches the 10,000 limit, the panel shows a `* history truncated` hint. Streaming speed and TTFT use this live mirror so they can update during a call. If a message has no matching rate, the cost row keeps OpenCode's reported blended cost instead of showing a partial recomputation.
+The plugin requests main-session history directly with a limit of 10,000 messages (on V2 the adapter pages `message.list` 200 rows at a time via `cursor.next` until that total or the end of history). When the direct request fails (V2 falls back to the TUI store window, V1 to its 100-message mirror) or the returned history reaches the 10,000 limit, the panel shows a `* history truncated` hint. V2 cannot prove a populated store window is complete — the host fills it one page at a time — so any non-empty fallback is marked truncated, while a session with no messages is complete once its first sync lands. Streaming speed and TTFT use this live mirror so they can update during a call. If a message has no matching rate, the cost row keeps OpenCode's reported blended cost instead of showing a partial recomputation.
 
 ### Timeline logs (`timeline`, default off)
 
@@ -293,14 +330,19 @@ Then reinstall via `Ctrl+P` → install plugin, and **restart OpenCode**.
 To avoid the pinning issue entirely, install a **pinned version** instead of `@latest`:
 
 ```jsonc
-{ "plugin": ["opencode-cache-hit@0.7.3"] }
+{ "plugins": ["opencode-cache-hit@1.0.0"] }
 ```
 
 ## Compatibility
 
 Model-agnostic: any OpenCode provider that exposes assistant `tokens` / `cost` on messages (DeepSeek, Claude, GPT, etc.). Data comes from the OpenCode session API, same as visual-cache.
 
-**Requires** OpenCode with TUI plugin slots (`@opencode-ai/plugin` ≥ 1.14). Works alongside visual-cache; no extra dependencies at runtime beyond peers in [package.json](package.json).
+**Requires**:
+
+- **OpenCode 2** with bundled OpenTUI `>=0.6.6` (all current V2 releases). Plugins run on OpenCode's own OpenTUI runtime; a plugin built against an older OpenTUI fails to load with a duplicate `OPENTUI_FORCE_WCWIDTH` error.
+- **OpenCode 1 is no longer officially supported from 1.0.0 (best-effort only).** The V1 `tui(api)` entry and `exports["./tui"]` remain in the bundle, so it may still work on OpenCode 1; but V1 bundles OpenTUI 0.4.5, below the peer requirement, and later releases will not test or fix OpenCode 1-specific issues. Pin `0.7.x` if you still run OpenCode 1.
+
+Works alongside visual-cache; no extra dependencies at runtime beyond peers in [package.json](package.json).
 
 **Sidebar not showing?** `sidebar_content` plugins — this one included — then render **nothing at all**: no panel, no placeholder, no error, while the plugin still loads normally. OpenCode's own sidebar is hidden by any of:
 
@@ -308,7 +350,7 @@ Model-agnostic: any OpenCode provider that exposes assistant `tokens` / `cost` o
 - **Toggled off earlier** — that toggle persists (`sidebar: "hide"` in TUI state), so a sidebar hidden once stays hidden at any width until toggled back on.
 - **Sub-agent (child) session** — the sidebar is never rendered for a session with a `parentID`, and the toggle does not override it. Open the parent session to see the panel.
 
-`tui.json` cannot force the sidebar on — its state is only `auto` or `hide`. To give it a dedicated key, bind `keybinds.sidebar_toggle`.
+The client sidebar setting (`tui.json` on V1, `session.sidebar` in `cli.json` on V2) cannot force the sidebar on — its state is only `auto` or `hide`. To give it a dedicated key, bind `keybinds.sidebar_toggle`.
 
 ## Documentation
 
@@ -331,6 +373,9 @@ src/
   plugin.tsx              # sidebar_content slot
   sidebar-host.tsx        # messages, child sync, timeline
   widget.tsx
+  types.ts                # internal TuiApi / TuiEvent contract
+  v1-map.ts               # V1 legacy events → internal contract
+  v2/                     # V2 context adapter (server entry, map, types)
   stats.ts / timeline/ / tui-panel/
 tests/
 ```

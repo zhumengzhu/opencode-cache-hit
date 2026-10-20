@@ -8,6 +8,8 @@ Sidebar TTFT works with default plugin config. It does **not** require `timeline
 
 Design details: [TTFT Hybrid Implementation](./ttft-hybrid.md).
 
+> **Event names**: this document uses the plugin's internal event contract (`TuiEvent` in `src/types.ts`): `part` / `message` / `delta` / `tick`. OpenCode 1 (`message.part.updated`, `message.part.delta`, …) and OpenCode 2 (`session.text.started`, `session.text.delta`, …) source events are mapped onto it in `v1-map.ts` / `v2/adapter.ts`; see [design.md § Event mapping](./design.md#event-mapping).
+
 ---
 
 ## When `"—"` is normal
@@ -34,8 +36,8 @@ Design details: [TTFT Hybrid Implementation](./ttft-hybrid.md).
 Some setups never expose stream parts or `part.time.start`:
 
 - **Local models** (LM Studio, Ollama) may not populate the parts table ([#23673](https://github.com/anomalyco/opencode/issues/23673))
-- **Missing `part.time.start`** on `message.part.updated` — plugin falls back to TUI deltas and a part-state scan; if both are empty, TTFT stays `"—"`
-- **`message.part.delta` not delivered** on some OpenCode versions ([#27663](https://github.com/anomalyco/opencode/issues/27663))
+- **Missing `part.time.start`** on `part` events — plugin falls back to TUI deltas and a part-state scan; if both are empty, TTFT stays `"—"`
+- **Stream deltas not delivered** on some OpenCode versions (V1 `message.part.delta`, [#27663](https://github.com/anomalyco/opencode/issues/27663))
 - **Invalid timestamps** (`part.time.start <= msg.time.created`, e.g. SDK issue [#21544](https://github.com/anomalyco/opencode/issues/21544)) — value is omitted rather than showing 0 or negative TTFT
 
 ### 3. Timeline JSONL has no `ttftMs` but sidebar shows a value
@@ -72,7 +74,7 @@ Ensure `timeline.enabled` is `true` in `~/.config/opencode/cache-hit.json` (or l
 | Issue | Effect on TTFT |
 |-------|----------------|
 | [#23673](https://github.com/anomalyco/opencode/issues/23673) Local models, no parts | Often always `"—"` |
-| [#27663](https://github.com/anomalyco/opencode/issues/27663) Lost `message.part.delta` | TUI fallback may not run |
+| [#27663](https://github.com/anomalyco/opencode/issues/27663) Lost V1 `message.part.delta` | TUI fallback may not run |
 | [#26924](https://github.com/anomalyco/opencode/issues/26924) Part event ordering | Plugin uses multiple sources to compensate |
 | [#21544](https://github.com/anomalyco/opencode/issues/21544) `time.start` overwritten | Invalid SDK timestamps are skipped |
 

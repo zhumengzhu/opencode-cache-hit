@@ -2,6 +2,8 @@
 
 功能：在侧边栏面板中显示 **TPOT**（每个输出 token 耗时，ms/token），与现有的缓存命中率 / token / 费用指标并列。
 
+> **事件名**：本文使用插件内部事件契约（`src/types.ts` 的 `TuiEvent`）：`part` / `message` / `delta` / `tick`。OpenCode 1 与 OpenCode 2 的源事件分别在 `v1-map.ts` / `v2/adapter.ts` 中映射到该契约，见 [design.md § 事件映射](./design.md#事件映射)。
+
 ## 1. 参考：MiMo-Code 侧边栏
 
 MiMo-Code 的 TUI 侧边栏使用两种模式显示速度：
@@ -77,7 +79,7 @@ TPOT = generationMs / (output_tokens + reasoning_tokens - 1)
 {
   "display": {
     "showSpeed": true,
-    "speedUnit": "tpot"
+    "speedUnit": "tps"
   }
 }
 ```
@@ -85,7 +87,7 @@ TPOT = generationMs / (output_tokens + reasoning_tokens - 1)
 | 字段 | 默认 | 含义 |
 |------|------|------|
 | `showSpeed` | `true` | 显示/隐藏速度区域 |
-| `speedUnit` | `"tpot"` | `"tpot"`（ms/tok）或 `"tps"`（tok/s） |
+| `speedUnit` | `"tps"` | `"tps"`（tok/s）或 `"tpot"`（ms/tok） |
 
 ---
 
@@ -135,7 +137,7 @@ TPOT = generationMs / (output_tokens + reasoning_tokens - 1)
 | 极短已完成轮次 | **最近/平均** 显示 `—` | `generationMs < 500` 时 `computeTokenTpotMs` 返回 undefined |
 | 单 token 输出 | TPOT 未定义 | 返回 `undefined` → 显示 `—` |
 
-> **轮询策略：** 自适应 `setTimeout`（流式 1s / 空闲 3s），辅以 `message.part.updated` 事件驱动唤醒。极轻量 — 空闲 tick 仅更新 phase 指示（`·`）。
+> **轮询策略：** 自适应 `setTimeout`（流式 1s / 空闲 3s），辅以 `part` / `delta` 事件驱动唤醒。极轻量 — 空闲 tick 仅更新 phase 指示（`·`）。
 
 **`—` 用法（与 §2 一致）**：**实时** 空闲为 `·`；`—` 用于首Token、单 token TPOT 等无可靠数据的指标，不用于流式空闲。
 
@@ -178,7 +180,7 @@ start = firstPartTime（> created 时）?? msg.time.created
 速度 ≈ (Δchars / 4) / Δt
 ```
 
-由定时轮询或 `message.part.delta` 打点，对每个进行中的消息维护 `(时间戳, 字符数)` 环形缓冲。
+由定时轮询或 `delta` 事件打点，对每个进行中的消息维护 `(时间戳, 字符数)` 环形缓冲。
 
 | | 累积平均（当前） | 滑窗式 |
 |--|-----------------|--------|

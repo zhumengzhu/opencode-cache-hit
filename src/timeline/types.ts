@@ -3,6 +3,8 @@ import type { ToolDurationRecord } from "../tool-timing.ts"
 /** Single LLM call row (one JSONL line). */
 export type LlmCallRecord = {
   schema: 1
+  /** Writer identity: several agents share the same log directory. */
+  producer?: string
   recordedAt: string
   sessionId: string
   rootSessionId: string

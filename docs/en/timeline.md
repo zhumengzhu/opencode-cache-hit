@@ -2,6 +2,8 @@
 
 For developers. Sidebar aggregation: [design.md](./design.md). User guide: [README.md](../../README.md).
 
+> **Event names**: this document uses the plugin's internal event contract (`TuiEvent` in `src/types.ts`): `part` / `message` / `delta` / `tick`. OpenCode 1 (`message.part.updated`, `message.updated`, …) and OpenCode 2 (`session.text.started`, `session.step.ended`, …) source events are mapped onto it in `v1-map.ts` / `v2/adapter.ts`; see [design.md § Event mapping](./design.md#event-mapping).
+
 **Phase 1 (JSONL on disk) is implemented**; default `timeline.enabled: false`. Phase 2 sidebar Timeline section and Phase 3 metric modes are not done.
 
 ## Goals and non-goals
@@ -36,6 +38,7 @@ flowchart LR
 ```typescript
 export type LlmCallRecord = {
   schema: 1
+  producer?: string        // writer identity ("opencode/<version>" here; pi/dsh share the same directory)
   recordedAt: string       // ISO 8601 with local timezone offset
   sessionId: string
   rootSessionId: string    // main session; differs for child scope
@@ -72,7 +75,7 @@ export type LlmCallRecord = {
 
 Optional array of completed tool calls within the assistant turn. Each tool call is associated with the assistant message that triggered it (matched by `messageID`). A single assistant message may trigger multiple tool calls (parallel or sequential); all appear in the same `toolDurations` array.
 
-Captured from `message.part.updated` when a tool part transitions `running → completed` or `running → error`. Omitted when timeline is disabled, no tool parts ran, or part events were missed (no `api.state.part()` backfill, unlike TTFT). The `summary` field is controlled by `timeline.toolSummary`.
+Captured from `part` events when a tool part transitions `running → completed` or `running → error`. Omitted when timeline is disabled, no tool parts ran, or part events were missed (no `api.state.part()` backfill, unlike TTFT). The `summary` field is controlled by `timeline.toolSummary`.
 
 | Field | Description |
 |-------|-------------|
@@ -109,9 +112,10 @@ Only tools that reached `completed` or `error` are included; still-running tools
 
 Capture order (see [ttft-hybrid.md](./ttft-hybrid.md)):
 
-1. `message.part.updated` — `part.time.start` on `text` / `reasoning` (sdk)
-2. `message.part.delta` — `Date.now()` on first `text` / `reasoning` delta (tui)
-3. `message.updated` — scan `api.state.part()` for the earliest valid `time.start` if still missing
+1. `part` event — `part.time.start` on `text` / `reasoning` (sdk)
+2. `delta` event — `Date.now()` on first `text` / `reasoning` delta (tui)
+3. `message` event — scan `api.state.part()` for the earliest valid `time.start` if still missing
+4. V2 only: the store row's timed parts are replayed as `part` events right before `message`, which is what survives a plugin hot reload mid-turn (source 1 semantics, arrives late; text parts carry no stored time)
 
 When all sources fail (e.g. local models with no parts), `ttftMs` is omitted — expected for some providers.
 
@@ -119,8 +123,8 @@ When all sources fail (e.g. local models with no parts), `ttftMs` is omitted —
 
 | Source | Description | Reliability |
 |--------|-------------|-------------|
-| `"sdk"` | `part.time.start` — SDK's `Date.now()` when first stream chunk arrives (via `message.part.updated` or `api.state.part()` scan) | ✅ Most accurate (excludes local IPC/event-loop latency) |
-| `"tui"` | `Date.now()` on first `message.part.delta` | ✅ When BusEvents are delivered |
+| `"sdk"` | `part.time.start` — SDK's `Date.now()` when first stream chunk arrives (via `part` events or `api.state.part()` scan) | ✅ Most accurate (excludes local IPC/event-loop latency) |
+| `"tui"` | `Date.now()` on first `delta` event | ✅ When the host delivers stream deltas |
 
 **Priority logic**: SDK timing is preferred; once an SDK value is set, later TUI events are ignored. TUI values can be upgraded when a valid SDK `time.start` arrives later. Invalid timestamps (`start <= created`) are dropped.
 
@@ -140,7 +144,7 @@ Event-driven path in `sidebar-host.tsx` → `timeline/collector.ts`:
 
 > **Prerequisite — the collector only exists while the sidebar is mounted.** This path runs inside the sidebar host, so when OpenCode does not render the sidebar (terminal ≤ 120 columns without `session.sidebar.toggle`, or any child-session view) **no JSONL is written at all**: no rows, no error, `timeline.enabled: true` notwithstanding. See README § Compatibility.
 
-1. `message.updated` delivers one assistant `Message`.
+1. `message` event delivers one assistant `Message`.
 2. `handleMessage(sessionID, msg)` resolves scope (`main` if `sessionID === root`, else `child` if in `childIds`).
 3. `assistantMessageToRecord()` in `src/timeline/records.ts` builds one `LlmCallRecord` (reads TTFT from `firstPartTime`, tool durations from `toolTiming`).
 4. When `timeline.enabled` and flush rules pass → append one JSONL line.
@@ -231,7 +235,7 @@ Example values above; code defaults below (`enabled: false`, rotation `0` except
 1. Optional size roll **before** append.
 2. `appendFile` one JSON line.
 3. Optional line trim **after** append.
-4. Event-driven: `message.updated` → `handleMessage()` → fire-and-forget `appendFile`. No polling and no **write-side** dedup: with `flushIncomplete: true` the same `messageKey` is written once per mid-stream flush. Readers collapse those — `timeline-dashboard.ts` keeps the latest record per `messageKey` and never lets an incomplete one replace a complete one (`plot-hit-rate.ts` does not dedupe).
+4. Event-driven: `message` event → `handleMessage()` → fire-and-forget `appendFile`. No polling and no **write-side** dedup: with `flushIncomplete: true` the same `messageKey` is written once per mid-stream flush. Readers collapse those — `timeline-dashboard.ts` keeps the latest record per `messageKey` and never lets an incomplete one replace a complete one (`plot-hit-rate.ts` does not dedupe).
 
 ## Rotation and retention
 
@@ -271,21 +275,21 @@ New filename after midnight; previous days remain until cleanup runs.
 
 ### Collection
 
-- `message.updated` event carries the full `Message` object. The collector subscribes directly — no polling, no write-side dedup (duplicate `messageKey` lines are collapsed on read; see § Write pipeline).
-- Switching main session: `resetForRootChange()` clears collector memory; `firstPartTime` and `toolTiming` trackers reset in `sidebar-host`; events for the new session arrive naturally. **`timeline` config** (including `enabled`, `toolSummary`, `dir`) is re-read from `cache-hit.json` on main session switch — same as `display` / `cacheTTL`; edits mid-session without switching sessions require a plugin reload.
+- `message` event carries the full `Message` object. The collector subscribes directly — no polling, no write-side dedup (duplicate `messageKey` lines are collapsed on read; see § Write pipeline).
+- Switching main session: `resetForRootChange()` clears collector memory; `firstPartTime` and `toolTiming` trackers reset in `sidebar-host`; events for the new session arrive naturally. **`timeline` config** (including `enabled`, `toolSummary`, `dir`) is re-read from `cache-hit.json` on main session switch — same as `display` / `cacheTTL` / `dynamicPricing` / `cost`; edits mid-session without switching sessions require a plugin reload.
 - Restarts are safe: messages before startup were already written to JSONL in the previous session. No replay, no scan.
 
 ## Runtime wiring
 
 ```mermaid
 sequenceDiagram
-  participant E as message.updated
+  participant E as message event
   participant H as sidebar-host
   participant C as timeline/collector
   participant W as timeline/writer
 
-  E->>H: { sessionID, info: Message }
-  H->>C: handleMessage(sessionID, info)
+  E->>H: { info: AssistantMessage }
+  H->>C: handleMessage(info.sessionID, info)
   alt assistant and complete
     C->>W: append JSONL (fire-and-forget)
   end
@@ -322,6 +326,8 @@ bun scripts/timeline-dashboard.ts --open
 ```
 
 Default log dir matches `timeline.dir` in plugin config (`~/.local/share/opencode/logs/cache-hit/`).
+
+The dashboard's Per-Call table shows a **Producer** column and filter, so records written by `opencode/<version>`, `pi`, and `dsh` into the same directory stay distinguishable (older rows without the field show as `unknown`).
 
 ### Phase 2 — sidebar Timeline section (planned)
 
@@ -363,5 +369,5 @@ Default log dir matches `timeline.dir` in plugin config (`~/.local/share/opencod
 ## Example line
 
 ```json
-{"schema":1,"recordedAt":"2024-05-30T08:00:00.000+08:00","sessionId":"sess_main","rootSessionId":"sess_main","scope":"main","messageKey":"sess_main:m1","modelId":"deepseek/v4","created":"2024-05-30T07:59:50.000+08:00","completedAt":"2024-05-30T08:00:00.000+08:00","durationMs":10000,"isComplete":true,"input":1200,"output":80,"reasoning":0,"cacheRead":38000,"cacheWrite":0,"cost":0.012,"hitPercent":96.9,"skippedForHit":false,"skippedForMetrics":false,"ttftMs":944,"ttftSource":"sdk","tps":8.83,"tpot":114.63,"itlP50":12,"itlP90":15,"itlCount":5,"finish":"stop"}
+{"schema":1,"producer":"opencode/1.0.0","recordedAt":"2024-05-30T08:00:00.000+08:00","sessionId":"sess_main","rootSessionId":"sess_main","scope":"main","messageKey":"sess_main:m1","modelId":"deepseek/v4","created":"2024-05-30T07:59:50.000+08:00","completedAt":"2024-05-30T08:00:00.000+08:00","durationMs":10000,"isComplete":true,"input":1200,"output":80,"reasoning":0,"cacheRead":38000,"cacheWrite":0,"cost":0.012,"hitPercent":96.9,"skippedForHit":false,"skippedForMetrics":false,"ttftMs":944,"ttftSource":"sdk","tps":8.83,"tpot":114.63,"itlP50":12,"itlP90":15,"itlCount":5,"finish":"stop"}
 ```

@@ -7,14 +7,14 @@ Development, packaging, and npm release notes for **opencode-cache-hit**. User i
 ```bash
 bun install   # dev: solid-js; peers resolved by OpenCode at runtime
 bun test
-bun run check
+bun run check   # bun test + tsc --noEmit (type-check via tsconfig.json)
 ```
 
 Architecture: [docs/en/design.md](docs/en/design.md). After refactors, `tests/module-load.test.ts` catches broken import paths.
 
 Coding agents: [AGENTS.md](AGENTS.md).
 
-After `bun install`, a **pre-push** hook runs `bun test` (skip with `git push --no-verify`). **CI** (GitHub Actions on `main` and PRs) runs the same tests on the server.
+After `bun install`, a **pre-push** hook runs `bun run check` — tests plus `tsc --noEmit` (skip with `git push --no-verify`). **CI** (GitHub Actions on `main` and PRs) runs the same check on the server.
 
 ## Configuration file
 
@@ -78,7 +78,7 @@ Keep `packages: "external"` in the build config: opencode resolves `solid-js` / 
 | `keywords` | Search tags |
 | `LICENSE` | License tab |
 
-`prepublishOnly` runs `bun test`. Set `author` in `package.json` before publish if not already present.
+`prepublishOnly` runs `bun run check` (tests + type-check). Set `author` in `package.json` before publish if not already present.
 
 **Release** — tag-driven CI publish, no local `npm publish` needed:
 
@@ -86,13 +86,13 @@ Keep `packages: "external"` in the build config: opencode resolves `solid-js` / 
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-Pushing a `v*` tag triggers [.github/workflows/publish.yml](.github/workflows/publish.yml): it runs `bun test`, then `npm publish --provenance --access public` (requires the `NPM_TOKEN` repo secret; provenance uses the workflow's OIDC `id-token: write` permission). Check the result with `gh run list --workflow=publish.yml`.
+Pushing a `v*` tag triggers [.github/workflows/publish.yml](.github/workflows/publish.yml): it runs `bun run check` (tests + type-check), then `npm publish --provenance --access public` (requires the `NPM_TOKEN` repo secret; provenance uses the workflow's OIDC `id-token: write` permission). Check the result with `gh run list --workflow=publish.yml`.
 
 [opencode-visual-cache](https://www.npmjs.com/package/opencode-visual-cache) pre-bundles its `./tui` entry the same way (esbuild + `esbuild-plugin-solid`); `@mtayfur/opencode-cache-view` uses `@opentui/solid/bun-plugin`, like this repo.
 
 ## Pull requests
 
 - Ensure the [test workflow](.github/workflows/test.yml) passes on your branch.
-- Run `bun test` locally (or rely on pre-push / CI).
+- Run `bun run check` locally (or rely on pre-push / CI).
 - User-facing README: update [README.md](README.md) and mirror key points in [README.zh-CN.md](README.zh-CN.md).
 - Timeline: update [docs/en/timeline.md](docs/en/timeline.md) and [docs/zh-CN/timeline.md](docs/zh-CN/timeline.md).

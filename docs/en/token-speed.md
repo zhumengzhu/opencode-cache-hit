@@ -2,6 +2,8 @@
 
 Feature: display **token generation speed** in the sidebar panel as **TPOT** (ms per output token), alongside existing cache hit rate / token / cost metrics.
 
+> **Event names**: this document uses the plugin's internal event contract (`TuiEvent` in `src/types.ts`): `part` / `message` / `delta` / `tick`. OpenCode 1 and OpenCode 2 source events are mapped onto it in `v1-map.ts` / `v2/adapter.ts`; see [design.md § Event mapping](./design.md#event-mapping).
+
 ## 1. Reference: MiMo-Code sidebar
 
 MiMo-Code's TUI sidebar displays speed using two modes:
@@ -77,7 +79,7 @@ Extend "Agents" section with per-child TPOT rows. Uses full turn duration only (
 {
   "display": {
     "showSpeed": true,
-    "speedUnit": "tpot"
+    "speedUnit": "tps"
   }
 }
 ```
@@ -85,7 +87,7 @@ Extend "Agents" section with per-child TPOT rows. Uses full turn duration only (
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `showSpeed` | `true` | Show/hide speed section |
-| `speedUnit` | `"tpot"` | `"tpot"` (ms/tok) or `"tps"` (tok/s) |
+| `speedUnit` | `"tps"` | `"tps"` (tok/s) or `"tpot"` (ms/tok) |
 
 ---
 
@@ -135,7 +137,7 @@ Placement: between **Detail** and **Model** sections.
 | Very short completed turns | **Last** / **Avg** show `—` | `computeTokenTpotMs` returns undefined when `generationMs < 500` |
 | Single-token output | TPOT undefined | Returns `undefined` → displays `—` |
 
-> **Polling strategy:** Adaptive `setTimeout` (1s active / 3s idle), complemented by `message.part.updated` event-driven wake-up. Very lightweight — idle ticks only update the phase indicator (`·`).
+> **Polling strategy:** Adaptive `setTimeout` (1s active / 3s idle), complemented by `part` / `delta` event-driven wake-up. Very lightweight — idle ticks only update the phase indicator (`·`).
 
 **`—` usage (aligned with §2):** **Now** idle is `·`; `—` is for metrics without reliable data (e.g. TTFT, single-token TPOT), not streaming idle.
 
@@ -178,7 +180,7 @@ Measure speed over a recent window Δt (e.g. 1–3s):
 speed ≈ (Δchars / 4) / Δt
 ```
 
-Samples from periodic polls or `message.part.delta` events (ring buffer of `(timestamp, charCount)` per in-flight message).
+Samples from periodic polls or `delta` events (ring buffer of `(timestamp, charCount)` per in-flight message).
 
 | | Cumulative (current) | Sliding window |
 |--|---------------------|----------------|

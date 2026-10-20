@@ -74,7 +74,7 @@ sequenceDiagram
 
   Slot->>Host: sessionId, display, api
   Host->>API: session.list → childIds
-  API-->>Host: message.updated { info: Message }
+  API-->>Host: message { info } / tick
   Host->>Host: refreshTick++, timeline.handleMessage(info)
   Host->>API: session.messages(sid, limit=10000) → 主 session 指标历史
   Host->>API: session.get(cid) / session.messages(cid) → 子 session 聚合
@@ -87,14 +87,17 @@ sequenceDiagram
 
 | 文件 | 职责 |
 |------|------|
-| `plugin.tsx` | `api.slots.register`（`order: 56`，紧邻 visual-cache）；加载配置与 `formatCost` |
-| `sidebar-host.tsx` | 绑定 `sessionId`；主 session 直接历史；`mainSnap` / `mainMessages` / `subAgentList`；`refreshTick` + `message.updated` |
+| `plugin.tsx` | 双入口：V1 `tui(api)` + V2 `setup(ctx)`；加载配置与 `formatCost` |
+| `types.ts` | 两版本共用的内部 `TuiApi` / `TuiEvent` 契约 |
+| `v1-map.ts` | V1 旧式 `{ properties }` 事件与 SDK 线格式（`{ path, query }` / `{ data }` 信封）→ 内部契约（纯函数，有单测） |
+| `v2/adapter.ts` | V2 context/事件 → 内部契约 |
+| `sidebar-host.tsx` | 绑定 `sessionId`；主 session 直接历史；`mainSnap` / `mainMessages` / `subAgentList`；`refreshTick` + message/tick 事件 |
 | `widget.tsx` | `sessionId` 非空则渲染面板；`hasData` 否则 noData |
 | `use-cache-hit-metrics.ts` | Hit 条、趋势、Combined Hit、hasData |
 | `main-session-view.tsx` / `agents-view.tsx` | 业务区块 |
 | `cache-hit-rows.tsx` | Detail 区共用 token 行 |
 | `stats.ts` | 纯函数聚合（无 UI） |
-| `session-messages.ts` | 主 session 直接历史加载器与数据源状态 |
+| `session-messages.ts` | 基于类型化 client 契约的主 session 历史加载器与数据源状态 |
 | `lineage-stats.ts` | provider/model lineage 分桶与当前 lineage 选择 |
 | `pricing.ts` | 按消息计算混合模型缓存价值 |
 | `cache-ttl.ts` / `cache-ttl-view.tsx` | 按 lineage 独立计算缓存 TTL |
@@ -105,6 +108,42 @@ sequenceDiagram
 | `token-speed.ts` / `streaming-state.ts` | 速度计算与流式 phase 状态机 |
 | `timeline/` | 按次 JSONL（`records` / `writer` / `collector`） |
 | `plugin-config.ts` / `load-config.ts` | 配置归一化与默认值 |
+
+### 版本支持
+
+同一个包通过 `src/plugin.tsx` 的单一默认导出同时服务 OpenCode 1 和 2：
+
+| 版本 | 入口 | 插槽 |
+|------|------|------|
+| V1 | `tui(api)` | `sidebar_content`（`order: 56`） |
+| V2 | `setup(ctx)` | `sidebar.content` |
+
+- V2 的 CLI loader 调用 `setup(ctx)` 并忽略 `tui`；V1 的 TUI loader 调用 `tui(api)` 并忽略 `setup`。
+- `exports["."]` 是空的 V2 server 入口（`src/v2/server.ts`），使包能从 `opencode.json` 加载，V2 才会报告 `features.tui` 并挂载侧边栏。
+- `src/v2/adapter.ts` 把 V2 context 映射为内部 `TuiApi` / `TuiEvent` 契约（`src/types.ts`）；纯映射逻辑在 `src/v2/map.ts`，无需运行中的 OpenCode 即可单测。V1 的旧式事件载荷在 `src/v1-map.ts` 映射到同一契约。
+- V2 没有消息级的流事件：一个 step 就是一条 assistant 消息，因此 adapter 用 `session.step.started` 加上终止事件 `session.step.ended` / `session.step.failed` 合成 `message` 事件（store 行用于补上 compaction 的 `summary` 标记）。
+- V2 插件运行在 OpenCode 内置的 OpenTUI 上（当前版本为 `0.6.6`）。`@opentui/*` peers 保持 `>=0.6.6`：旧版本会在 OpenTUI 的 `globalThis` 环境变量注册表中以冲突类型注册 `OPENTUI_FORCE_WCWIDTH`，导致插件加载中止。
+- 本地目录安装会解析 `<dir>/server` / `<dir>/tui`，而不是 `package.json` exports；根目录的 `server.ts` / `tui.ts` 垫片分别转发到空的 server 入口和已构建的 bundle。按包名安装时仍走 `exports`。
+- 自 1.0.0 起仅 V2 路径获得官方支持与测试；V1 路径仅尽力兼容。
+
+### 事件映射
+
+内部契约（`src/types.ts` 的 `TuiEvent`）与版本无关，翻译各自留在入口：
+
+| 内部事件 | V1 来源（`tui(api)`） | V2 来源（`setup(ctx)`） | 说明 |
+|----------|----------------------|-------------------------|------|
+| `part` | `message.part.updated`（`properties.part`） | `session.text.started`、`session.reasoning.started`、`session.tool.input.started`、`session.tool.success` / `failed` | V2 把一次 tool 调用拆成多个事件（callID/name/start/end）；只有 V1 会报 `state.status = "pending"`（纯 tool-call 的 TTFT 依赖它） |
+| `message` | `message.updated`（`properties.info`） | `session.step.started` + `session.step.ended` / `session.step.failed` | 一个 step 就是一条 assistant 消息；compaction 的 `summary` 标记由 store 行补上。失败的 step 没有 `finish`，按 V2 的投影记为 `"error"` |
+| `delta` | `message.part.delta`（`{ messageID, field }`） | `session.text.delta`、`session.reasoning.delta` | 首个 chunk 提供 TUI 侧 TTFT 兜底与 ITL 间隔；V1 的 `field: "tool"` delta 有意丢弃（tool part 自带时间戳） |
+| `tick` | 无 `info` 的 `message.updated` | `session.usage.updated` | 只做刷新（重读 `session.get()`），不带消息 |
+
+- V2 没有消息级的流事件；`session.text.ended` / `session.reasoning.ended` 用权威全文覆盖 adapter parts 缓存里累积的 delta。
+- 宿主事件面是 `src/v2/adapter.ts` 里的一张表，表里每个名字都必须在 `tests/fixtures/v2-events.ts` 有一条用例。用例按顺序投递宿主 payload，并逐字段钉住它必须产生的内部事件——所以 adapter 换了「读哪个 payload 字段」（比如 `created` → `data.timestamp`）该用例就会红。这些 payload 是**假设而非抓包**：宿主自己写的 timeline 能确认 adapter 依赖的四个字段（`created`、delta 的消息身份、tool 的 `id`/`name`、`step.ended` 的 `assistantMessageID`），事件名则通过对已安装的 OpenCode 2.0.32 CLI 二进制做字符串扫描确认（下表每个名字都存在，而 SDK 总线 schema 的 `session.next.*` 命名在那里面 0 命中）。`step.started` 的元数据字段与失败/删除类事件仍未经观测确认。真实抓包应当覆盖它们，它们本身不构成关于宿主的证据。
+- `session.message.content.updated` 在宿主里存在（名字在 2.0.32 二进制里），但 adapter **不**订阅它。它只在回放时携带一份全量内容快照，处理它也只能刷新该消息的 part 时间戳；在抓包证明它确实会触发之前，缺这个 handler 最多让回放后的 TTFT 缺失，不影响正确性。
+- `api.state.part()` 在 V1 是宿主 API；V2 由 adapter 用有界缓存（200 条消息）提供同样的视图。
+- V2 的历史读取走生成的客户端（`message.list` 按 200 条一页、用 `cursor` 翻到调用方上限）。客户端缺失或第一页失败时回退到 TUI store 窗口；该窗口由宿主一页一页填充（当前构建是 20 条），所以非空窗口一律报告为不完整——插件契约没有 cursor，行数也不是可用代理。空窗口会先等那一次在途的 `message.sync`（sync 落地后没有任何回读），所以空结果只代表"会话确实为空"（`complete`）或"同步失败"（`incomplete`）。
+- 插件热重载会销毁 sidebar host 与 adapter，进行中消息的 part 事件因此丢给已销毁的 tracker。所以 `step.ended` 在发出 `message` 之前，会从该消息的 store 行重放带时间的 part（见 [ttft-hybrid.md § Store 回放](./ttft-hybrid.md)）；text part 在 store 里无时间戳，以 text 开头的回复无法用这条路径恢复 TTFT（只有首个内容 part 可以播下它）。
+- `message` 一定带 `sessionID`：V1 从 info 里取，V2 从 step 事件里取。
 
 ### TUI 面板框架（`src/tui-panel/`）
 
@@ -130,7 +169,7 @@ sequenceDiagram
 flowchart TD
   A[sessionId 变化] --> B[resetForParentChange]
   B --> C[loadChildren 立即 session.list]
-  E[message.updated 任意会话] --> R[refreshTick++]
+  E[message 事件 任意会话] --> R[refreshTick++]
   E --> F{sessionID !== parent?}
   F -->|是| G[debounce 200ms]
   G --> C2[loadChildren 覆盖 childIds]
@@ -142,7 +181,7 @@ flowchart TD
 
 - **唯一来源**：`childIds` 始终由 `session.list` 结果**覆盖**写入，不再 `session.get` + 追加（避免漏发现、僵尸 id）。
 - **竞态**：`listGen` 在 parent 切换时递增；回调校验 generation 与 `parentId` 未变。
-- **流式**：外国 session 的 `message.updated` 很密，用 `CHILD_LIST_DEBOUNCE_MS`（200ms）合并 list 请求。
+- **流式**：外国 session 的 `message` 事件很密，用 `CHILD_LIST_DEBOUNCE_MS`（200ms）合并 list 请求。
 - **一层子 session**：`parentID === sid` 的直接子节点；嵌套子 agent 见「未来方向」。
 - **子 session 数据**：`session.get(cid)` → `aggregateFromSessionObject`（主路径）；不可用时降级到 `messages(cid)` → `aggregateSessionFromMessages`。若 session 聚合缺少 model/provider 元数据，从 messages 末尾补齐（`withModelFallback`）。
 
@@ -182,9 +221,9 @@ flowchart TD
 | 主 session 实时消息 | `createMemo` 读取 `refreshTick` + TUI 镜像，用于流式速度和 TTFT |
 | 主 session snapshot 兜底 | `session.get?.(sid)` 聚合值，再回退到 TUI 镜像 |
 | 子 agent 列表内容 | `refreshTick` + `childIds` → 每个 child 的 `session.get?.(cid)`；fallback `messages(cid)` |
-| 子 agent id 集合 | `session.list` 完成回调 / `message.updated` 发现新 child |
+| 子 agent id 集合 | `session.list` 完成回调 / `message` 发现新 child |
 
-主 session 显式订阅 `message.updated`（在 `sidebar-host`）：每次事件 `refreshTick++`，触发相关 memo 重算。主指标总量优先 DB 级 `session.get` 聚合（完整、不受上限影响）；lineage 分桶使用直接历史。流式速度和 TTFT 使用 TUI 镜像；子 session 总量优先使用 `session.get()`。
+主 session 显式订阅 `message` / `tick`（在 `sidebar-host`）：每次事件 `refreshTick++`，触发相关 memo 重算。主指标总量优先 DB 级 `session.get` 聚合（完整、不受上限影响）；lineage 分桶使用直接历史。流式速度和 TTFT 使用 TUI 镜像；子 session 总量优先使用 `session.get()`。
 
 ### session.get() 可用性
 
@@ -193,7 +232,7 @@ flowchart TD
 ### 累加规则
 
 - **不是**只在「最后一轮」算一次；session 内每条符合条件的 `role === assistant` 消息都进入累加。
-- **流式中**：同一条 message 的 `tokens` 可能多次变化；每次 `message.updated` 后重算。
+- **流式中**：同一条 message 的 `tokens` 可能多次变化；每次 `message` 事件后重算。
 - `reasoning` token **不参与**命中率分母。
 - `summary: true` 和 `agent: "compaction"` 的 assistant：从交互总量、速度、费用、趋势和 TTL 选择中排除。
 
@@ -278,7 +317,7 @@ flowchart TD
 | 指标切换 | 累计 / 最近 N 轮 / 滑动窗口；与时间轴 Phase 3 联动 | timeline.md § Phase 3 |
 | 子 agent | 递归子 session、按 agent 类型过滤 | timeline.md § 风险；侧栏另议 |
 
-实现日志时使用 `message.updated` 事件直接驱动的 `handleMessage()`；落盘异步、勿阻塞 TUI（见 timeline.md）。
+实现日志时使用 `message` 事件直接驱动的 `handleMessage()`；落盘异步、勿阻塞 TUI（见 timeline.md）。
 
 ## 插件缓存
 

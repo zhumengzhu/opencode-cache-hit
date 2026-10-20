@@ -1,5 +1,7 @@
 # Timeline Duplicate Writes: Analysis and Fix
 
+> **Historical record.** Written when the plugin consumed V1 `message.updated` directly. Current event names and the V1/V2 mapping: [design.md § Event mapping](./design.md#event-mapping).
+
 ## Overview
 
 Restarting OpenCode used to cause previously-written timeline records to be re-appended to JSONL log files, creating duplicates. **Impact**: 2,727 duplicate records found across 1,218 unique message keys in production logs.

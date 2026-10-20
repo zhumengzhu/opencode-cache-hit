@@ -25,7 +25,7 @@ export function buildOptions(entry = "./index.tsx"): Parameters<typeof Bun.build
 }
 
 export async function buildTui(
-  overrides: Parameters<typeof Bun.build>[0] = {},
+  overrides: Partial<Parameters<typeof Bun.build>[0]> = {},
 ): Promise<Awaited<ReturnType<typeof Bun.build>>> {
   const result = await Bun.build({ ...buildOptions(), ...overrides })
   if (!result.success) {

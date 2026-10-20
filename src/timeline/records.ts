@@ -3,6 +3,7 @@ import { isInteractiveAssistantMessage, perMessageHitPercent } from "../stats.ts
 import type { AssistantMessage } from "../types.ts"
 import type { LlmCallRecord } from "./types.ts"
 import type { ToolDurationRecord } from "../tool-timing.ts"
+import { PLUGIN_VERSION } from "../version.ts"
 
 /** Convert milliseconds timestamp to ISO 8601 with local timezone offset. */
 export function msToISOString(ms: number): string {
@@ -59,6 +60,7 @@ export function assistantMessageToRecord(
     : undefined
   return {
     schema: 1,
+    producer: `opencode/${PLUGIN_VERSION}`,
     recordedAt: msToISOString(recordedAt),
     sessionId,
     rootSessionId,

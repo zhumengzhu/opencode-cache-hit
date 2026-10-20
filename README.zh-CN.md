@@ -4,6 +4,9 @@
 
 OpenCode **TUI 侧边栏插件**：展示 prompt cache 命中率、token 用量与成本；**主 session + 子 agent** 同屏汇总（默认独立使用）。可选与 [opencode-visual-cache](https://www.npmjs.com/package/opencode-visual-cache) 共存。
 
+> [!IMPORTANT]
+> **1.0.0 是首个稳定的 OpenCode 2 版本，要求内置 OpenTUI `>=0.6.6`。** OpenCode 1 已**不再获得官方支持**：V1 入口仍保留在 bundle 中，**可能仍能使用**，但仅尽力兼容且未经测试。如仍在使用 OpenCode 1，请固定到 `0.7.x`。
+
 **语言：** [English](README.md) · 简体中文（本页）· [文档索引](docs/README.md)
 
 ![Cache Hit 侧边栏](docs/assets/cache-hit-panel.v4.zh.png)
@@ -66,7 +69,15 @@ OpenCode **TUI 侧边栏插件**：展示 prompt cache 命中率、token 用量�
 
 `Ctrl+P` → 输入 **install plugin** → 按 `Tab` 切换范围为 **global**（默认是 local）→ 输入 `opencode-cache-hit@latest` → 回车。
 
-全局插件安装到 `~/.cache/opencode/packages/opencode-cache-hit@latest/`。在 `~/.config/opencode/cache-hit.json` 创建配置：
+全局插件安装到 `~/.cache/opencode/packages/opencode-cache-hit@latest/`。在 `~/.config/opencode/cache-hit.json` 创建配置（所有字段均可选）：
+
+```jsonc
+{
+  "currency": "CNY",
+  "costUnit": "USD",
+  "rate": 6.77
+}
+```
 
 ### 方式 B：手动
 
@@ -79,7 +90,30 @@ OpenCode **TUI 侧边栏插件**：展示 prompt cache 命中率、token 用量�
 }
 ```
 
-本地开发：将 npm 名称替换为 checkout 的绝对路径，例如 `"/path/to/opencode-cache-hit"`。OpenCode 会加载包根目录及其 `index.tsx` 入口。
+本地开发：将 npm 名称替换为 checkout 的绝对路径，例如 `"/path/to/opencode-cache-hit"`。V2 对目录安装会解析 `<dir>/server` 与 `<dir>/tui`；根目录的 `server.ts` / `tui.ts` 垫片覆盖这两个路径，其中 `tui.ts` 转发到构建产物 `dist/tui.js`，因此请先执行 `bun run build`（安装时 `prepare` 会自动构建）。V1 解析 `exports["./tui"]`，缺失时回退到包根目录的 `index.tsx`。
+
+### OpenCode 2
+
+V2 不再读取 `tui.json`：把插件写进 `opencode.json` 的 `plugins`（或 CLI 专用的 `cli.json`）即可，CLI 会自动加载其中的 TUI 部分。`cache-hit.json` 配置、侧边栏和 JSONL timeline 行为完全一致。
+
+```jsonc
+// ~/.config/opencode/opencode.json
+{
+  "plugins": ["opencode-cache-hit@latest"]
+}
+```
+
+迁移到 V2 的注意事项（插件 API、server API、`tui.json` → `cli.json`）见 [V2 迁移指南](https://opencode.ai/v2/docs/migrate-v1)。
+
+V2 的插件运行在 **OpenCode 内置的 OpenTUI 运行时**上，因此本包要求 **OpenTUI `>=0.6.6`**（见 `package.json` 的 peers）。用旧版 OpenTUI 构建的插件会因 `OPENTUI_FORCE_WCWIDTH` 环境变量重复注册而加载失败。空的 `exports["."]` server 入口让包可以从 `opencode.json` 加载，V2 才会报告 `features.tui` 并挂载侧边栏。
+
+本地 checkout（或尚未发布的特性分支）：把 `plugins` 指向目录而不是 npm 包名，然后**完全重启** OpenCode：
+
+```jsonc
+{
+  "plugins": ["./plugins/opencode-cache-hit"]
+}
+```
 
 复制 `cache-hit.config.example.json` → `~/.config/opencode/cache-hit.json`（推荐）或放在插件根目录旁。更改插件代码或配置后**重启 OpenCode**。
 
@@ -121,7 +155,7 @@ OpenCode **TUI 侧边栏插件**：展示 prompt cache 命中率、token 用量�
   "lang": "en",
   "panelBorder": true,
   "showSpeed": true,
-  "speedUnit": "tpot"
+  "speedUnit": "tps"
 }
 ```
 
@@ -131,7 +165,10 @@ OpenCode **TUI 侧边栏插件**：展示 prompt cache 命中率、token 用量�
 | `panelBorder` | `true` | 外框与内边距 |
 | `mainHitLabel` | （i18n） | 可选，覆盖 Hit 行标签 |
 | `showSpeed` | `true` | 显示/隐藏速度区块 |
-| `speedUnit` | `"tpot"` | `"tpot"`（ms/tok）或 `"tps"`（tok/s） |
+| `speedUnit` | `"tps"` | `"tps"`（tok/s）或 `"tpot"`（ms/tok） |
+
+> [!NOTE]
+> **1.0.0 变更：** `display.speedUnit` 默认值改为 `"tps"`（0.x 为 `"tpot"`）。如需保持旧单位，请显式设置 `"speedUnit": "tpot"`。
 
 **Agents** 段仅汇总**子 session**，不含主 session（详见 `agentsScopeHint`）。主 session 指标始终在上方块中；折叠 **Agents** 可节省空间。各子 session 行与主块 **Model** 行同源模型名（侧栏窄时会截断）；详见 [docs/zh-CN/design.md](docs/zh-CN/design.md)「子 session 行展示」。
 
@@ -141,7 +178,7 @@ OpenCode **TUI 侧边栏插件**：展示 prompt cache 命中率、token 用量�
 
 插件会从交互指标中排除 `summary: true` 或 `agent: "compaction"` 的 assistant 消息。启用 `timeline.logSummaryMessages` 时，JSONL 仍保留这些行，并标记 `skippedForMetrics: true`。
 
-插件直接请求主 session 历史，最多 10,000 条消息。当请求失败且镜像已满 100 条、或返回的历史达到 10,000 条上限时，面板会显示 `* history truncated`（历史可能不完整）提示。流式速度和 TTFT 使用实时镜像，因此可在调用过程中更新。如果某条消息没有匹配单价，费用行保留 OpenCode 的混合会话费用，不显示不完整的重算结果。
+插件直接请求主 session 历史，最多 10,000 条消息（V2 上 adapter 每次 `message.list` 取 200 条，用 `cursor.next` 翻页直到该上限或历史结束）。当直接请求失败（V2 回退到 TUI 的 store 窗口，V1 回退到 100 条镜像）或返回历史达到 10,000 上限时，面板会显示 `* history truncated`（历史可能不完整）提示。V2 的 store 窗口由宿主一页一页填充，非空窗口无法证明完整，因此一律标记为可能截断；空会话在首次 sync 落地后视为完整。流式速度和 TTFT 使用实时镜像，因此可在调用过程中更新。如果某条消息没有匹配单价，费用行保留 OpenCode 的混合会话费用，不显示不完整的重算结果。
 
 ### 时间轴日志（`timeline`，默认关闭）
 
@@ -293,14 +330,19 @@ rm -rf ~/.cache/opencode/packages/opencode-cache-hit@latest
 要彻底避免固定问题，可安装**固定版本**而非 `@latest`：
 
 ```jsonc
-{ "plugin": ["opencode-cache-hit@0.6.4"] }
+{ "plugins": ["opencode-cache-hit@1.0.0"] }
 ```
 
 ## 兼容性
 
 模型无关：任何在消息中暴露 assistant `tokens` / `cost` 的 OpenCode provider 均可（DeepSeek、Claude、GPT 等）。数据来自 OpenCode session API，与 visual-cache 一致。
 
-**需要**支持 TUI 插件槽位的 OpenCode（`@opencode-ai/plugin` ≥ 1.14）。可与 visual-cache 共存；运行时除 `package.json` 中声明的 peer 依赖外无额外依赖。
+**需要**：
+
+- **OpenCode 2**，且内置 OpenTUI `>=0.6.6`（当前 V2 版本均满足）。插件运行在 OpenCode 自带的 OpenTUI 运行时上；用旧版 OpenTUI 构建的插件会因 `OPENTUI_FORCE_WCWIDTH` 重复注册而加载失败。
+- **OpenCode 1 自 1.0.0 起不再获得官方支持（仅尽力兼容）。** V1 的 `tui(api)` 入口与 `exports["./tui"]` 仍保留在 bundle 中，因此在 V1 上**可能仍能运行**；但 V1 内置的 OpenTUI 0.4.5 低于 peer 要求，且后续版本不会再测试或修复 V1 专属问题。如仍在使用 OpenCode 1，请固定到 `0.7.x`。
+
+可与 visual-cache 共存；运行时除 `package.json` 中声明的 peer 依赖外无额外依赖。
 
 **侧边栏不显示？** `sidebar_content` 类插件（含本插件）于是**什么都不渲染**：没有面板、没有占位文字、也没有报错，而插件本身照常加载。OpenCode 侧边栏在以下任一情况下被隐藏：
 
@@ -308,7 +350,7 @@ rm -rf ~/.cache/opencode/packages/opencode-cache-hit@latest
 - **之前被切成隐藏** —— 该切换会持久化（TUI 状态 `sidebar: "hide"`），一旦隐藏，之后任何宽度下都不会自动出现，直到再次切换。
 - **子 session（sub-agent）** —— 带 `parentID` 的会话永不渲染侧边栏，手动切换也无效。要看面板请打开父会话。
 
-`tui.json` 无法强制常显：侧边栏状态只有 `auto` / `hide` 两种。想给它一个专用按键，可绑定 `keybinds.sidebar_toggle`。
+客户端侧边栏设置（V1 的 `tui.json`，V2 的 `cli.json` 中的 `session.sidebar`）无法强制常显：状态只有 `auto` / `hide` 两种。想给它一个专用按键，可绑定 `keybinds.sidebar_toggle`。
 
 ## 文档索引
 
@@ -331,6 +373,9 @@ src/
   plugin.tsx              # sidebar_content 插槽
   sidebar-host.tsx        # 消息、子会话同步、timeline
   widget.tsx
+  types.ts                # 内部 TuiApi / TuiEvent 契约
+  v1-map.ts               # V1 旧式事件 → 内部契约
+  v2/                     # V2 context 适配层（server 入口、映射、类型）
   stats.ts / timeline/ / tui-panel/
 tests/
 ```

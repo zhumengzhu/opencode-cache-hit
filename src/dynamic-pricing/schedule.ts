@@ -15,23 +15,21 @@ function prevWeekday(weekday: number): number {
   return ((weekday - 2 + 7) % 7) + 1
 }
 
-/** Whether the window applies every day (`days` omitted or empty). */
-function isEveryDayWindow(w: TimeWindow): boolean {
-  return !w.days || w.days.length === 0
+/** Whether the window's `days` list covers that weekday (omitted or empty = every day). */
+function coversDay(days: number[] | undefined, weekday: number): boolean {
+  return days === undefined || days.length === 0 || days.includes(weekday)
 }
 
 export function inWindow(dayMinute: number, weekday: number, w: TimeWindow): boolean {
-  const anyDay = isEveryDayWindow(w)
   if (w.start <= w.end) {
     // Same-day window: current day only; days filters the current day.
-    if (!anyDay && !w.days.includes(weekday)) return false
+    if (!coversDay(w.days, weekday)) return false
     return dayMinute >= w.start && dayMinute < w.end
   }
   // Cross-midnight windows anchor to their open day: the evening part [start, 24:00)
   // belongs to weekday; the morning part [00:00, end) is opened by the previous day.
-  if (dayMinute >= w.start) return anyDay || w.days.includes(weekday)
-  const prev = prevWeekday(weekday)
-  return dayMinute < w.end && (anyDay || w.days.includes(prev))
+  if (dayMinute >= w.start) return coversDay(w.days, weekday)
+  return dayMinute < w.end && coversDay(w.days, prevWeekday(weekday))
 }
 
 export type TzParts = {
@@ -167,11 +165,10 @@ export function nextBoundaryMs(
 function boundaryCarriedByDay(m: number, weekday: number, w: TimeWindow): boolean {
   if (w.start <= w.end) {
     // Same-day window: the open day carries both start and end boundaries.
-    return isEveryDayWindow(w) || w.days.includes(weekday)
+    return coversDay(w.days, weekday)
   }
   // Cross-midnight window: start is carried by the open day; end falls on the
   // next day, carried by the day after the open day.
-  const anyDay = isEveryDayWindow(w)
-  if (m === w.start) return anyDay || w.days.includes(weekday)
-  return anyDay || w.days.includes(prevWeekday(weekday))
+  if (m === w.start) return coversDay(w.days, weekday)
+  return coversDay(w.days, prevWeekday(weekday))
 }
