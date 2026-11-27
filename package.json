@@ -64,7 +64,7 @@
     "pre-push": "bun run check"
   },
   "dependencies": {
-    "solid-js": "^1.9.0"
+    "solid-js": "^2.0.3"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.14.0",
