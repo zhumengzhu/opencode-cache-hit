@@ -4,7 +4,9 @@ import {
   computePricing,
   computeSubsSaved,
   computeSessionPricing,
+  resolveShownSessionCost,
   EMPTY_PRICING,
+  EMPTY_SESSION_PRICING,
 } from "../src/pricing.ts"
 import type { ProviderInfo, SubAgentSummary } from "../src/types.ts"
 
@@ -191,5 +193,34 @@ describe("computeSessionPricing", () => {
     ], MOCK_PROVIDERS)
     expect(result.counted).toBe(0)
     expect(result.unpriced).toBe(1)
+  })
+})
+
+describe("resolveShownSessionCost", () => {
+  test("returns recomputed cost when unpriced > 0 but OpenCode blendedCost is 0 (e.g. mixed acp session)", () => {
+    expect(
+      resolveShownSessionCost(
+        { ...EMPTY_SESSION_PRICING, cost: 0.25, counted: 2, unpriced: 1, dynamic: true },
+        0,
+      ),
+    ).toBe(0.25)
+  })
+
+  test("falls back to OpenCode blendedCost when unpriced > 0 and blendedCost > 0", () => {
+    expect(
+      resolveShownSessionCost(
+        { ...EMPTY_SESSION_PRICING, cost: 0.25, counted: 2, unpriced: 1, dynamic: true },
+        0.5,
+      ),
+    ).toBe(0.5)
+  })
+
+  test("uses recomputed cost when all messages are priced and dynamic", () => {
+    expect(
+      resolveShownSessionCost(
+        { ...EMPTY_SESSION_PRICING, cost: 0.25, counted: 2, unpriced: 0, dynamic: true },
+        0.5,
+      ),
+    ).toBe(0.25)
   })
 })

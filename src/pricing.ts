@@ -50,6 +50,19 @@ export const EMPTY_SESSION_PRICING: SessionPricing = {
   dynamic: false,
 }
 
+/**
+ * Pick the session total cost to display: prefer the recomputed dynamic/override
+ * cost when dynamic rules priced every message, or when OpenCode reported 0 cost
+ * (e.g. unpriced ACP backends) so a single unpriced message doesn't wipe out all
+ * priced turns.
+ */
+export function resolveShownSessionCost(pricing: SessionPricing, blendedCost: number): number {
+  if (pricing.counted > 0 && pricing.dynamic && (pricing.unpriced === 0 || blendedCost === 0)) {
+    return pricing.cost
+  }
+  return blendedCost
+}
+
 export type PricingContext = {
   /** Current time (ms) for time-of-day matching. Default Date.now(). */
   now?: number

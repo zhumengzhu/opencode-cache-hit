@@ -319,11 +319,13 @@ bun scripts/plot-hit-rate.ts "$LOG" -o /tmp/hit.svg
 bun scripts/plot-hit-rate.ts "$LOG" --by-root -o /tmp/hit-multi.svg
 
 # interactive HTML dashboard (filters, Chart.js); add --open to launch browser
-# reads ~/.config/opencode/opencode.json (JSONC-aware) and recomputes costs with
-# dynamic pricing (time-of-day / context tiers) — injected as `dynCost`, shown
+# reads ~/.config/opencode/opencode.json / opencode.jsonc (when present) plus
+# dynamicPricing rules from cache-hit.json — injected as `dynCost`, shown
 # with ≈ and counted in charts/totals when it differs from the original cost
 bun scripts/timeline-dashboard.ts --open
 ```
+
+When OpenCode reports `msg.cost: 0` (e.g. unpriced ACP backends) and `dynamicPricing` explicitly configures a rate for that model, the collector also fills JSONL `cost` in USD directly on write.
 
 Default log dir matches `timeline.dir` in plugin config (`~/.local/share/opencode/logs/cache-hit/`).
 

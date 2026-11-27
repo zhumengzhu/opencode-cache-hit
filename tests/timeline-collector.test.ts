@@ -3,6 +3,7 @@ import { createFirstPartTimeTracker } from "../src/first-part-time.ts"
 import { createToolTimingTracker } from "../src/tool-timing.ts"
 import { createTimelineCollector } from "../src/timeline/collector.ts"
 import { DEFAULT_TIMELINE, type TimelineConfig } from "../src/plugin-config.ts"
+import { DEFAULT_SCHEDULE, type DynamicPricingConfig } from "../src/dynamic-pricing/types.ts"
 import type { AssistantMessage } from "../src/types.ts"
 import type { LlmCallRecord } from "../src/timeline/types.ts"
 
@@ -351,5 +352,93 @@ describe("createTimelineCollector (event-driven)", () => {
     expect(records).toHaveLength(2)
     expect(records[0].messageKey).toContain("b")
     expect(records[1].messageKey).toContain("c")
+  })
+
+  test("computes record cost from dynamicPricing when msg.cost is 0", async () => {
+    const appended: LlmCallRecord[] = []
+    const rules: DynamicPricingConfig = {
+      enabled: true,
+      timezone: "Asia/Shanghai",
+      schedule: DEFAULT_SCHEDULE,
+      contextThreshold: 200_000,
+      providers: {
+        acp: {
+          models: {
+            "gemini-4-*": {
+              cost: { input: 1.5, output: 7.5, cache: { read: 0.075, write: 0 } },
+            },
+          },
+        },
+      },
+    }
+    const c = createTimelineCollector({
+      getConfig: () => ({ ...DEFAULT_TIMELINE, enabled: true }),
+      getRootSessionId: () => "root1",
+      getChildIds: () => [],
+      firstPartTime: createFirstPartTimeTracker(),
+      toolTiming: createToolTimingTracker(),
+      getDynamicPricing: () => rules,
+      getProviders: () => [],
+      append: async (_p, rec) => {
+        appended.push(rec)
+      },
+    })
+    c.handleMessage(
+      "root1",
+      msg({
+        id: "a1",
+        providerID: "acp",
+        modelID: "gemini-4-hydrogen",
+        cost: 0,
+        tokens: { input: 1_000_000, output: 100_000, cache: { read: 500_000, write: 0 } },
+      }),
+    )
+    await new Promise((r) => setTimeout(r, 50))
+    expect(appended).toHaveLength(1)
+    expect(appended[0].cost).toBeCloseTo(1.5 + 0.75 + 0.0375, 6)
+  })
+
+  test("preserves non-zero msg.cost when OpenCode already computed cost", async () => {
+    const appended: LlmCallRecord[] = []
+    const rules: DynamicPricingConfig = {
+      enabled: true,
+      timezone: "Asia/Shanghai",
+      schedule: DEFAULT_SCHEDULE,
+      contextThreshold: 200_000,
+      providers: {
+        acp: {
+          models: {
+            "gemini-4-*": {
+              cost: { input: 1.5, output: 7.5, cache: { read: 0.075, write: 0 } },
+            },
+          },
+        },
+      },
+    }
+    const c = createTimelineCollector({
+      getConfig: () => ({ ...DEFAULT_TIMELINE, enabled: true }),
+      getRootSessionId: () => "root1",
+      getChildIds: () => [],
+      firstPartTime: createFirstPartTimeTracker(),
+      toolTiming: createToolTimingTracker(),
+      getDynamicPricing: () => rules,
+      getProviders: () => [],
+      append: async (_p, rec) => {
+        appended.push(rec)
+      },
+    })
+    c.handleMessage(
+      "root1",
+      msg({
+        id: "a2",
+        providerID: "acp",
+        modelID: "gemini-4-hydrogen",
+        cost: 0.42,
+        tokens: { input: 1_000_000, output: 0 },
+      }),
+    )
+    await new Promise((r) => setTimeout(r, 50))
+    expect(appended).toHaveLength(1)
+    expect(appended[0].cost).toBe(0.42)
   })
 })

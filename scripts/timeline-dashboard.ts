@@ -24,24 +24,60 @@ import {
 } from "../src/format-cost.ts"
 import { loadPluginConfig } from "../src/load-config.ts"
 import { recomputeRecordCost } from "../src/dynamic-pricing/recompute.ts"
+import type { DynamicPricingConfig } from "../src/dynamic-pricing/types.ts"
 import type { LlmCallRecord } from "../src/timeline/types.ts"
 import type { ProviderInfo } from "../src/types.ts"
 import { parseJsonc } from "../src/jsonc.ts"
 
+function parseProviderCost(c: Record<string, unknown>): ProviderInfo["models"][string]["cost"] {
+  const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0)
+  const nestCache = c.cache as { read?: unknown; write?: unknown } | undefined
+  const over = c.context_over_200k as Record<string, unknown> | undefined
+  const overCache = over?.cache as { read?: unknown; write?: unknown } | undefined
+  return {
+    input: num(c.input),
+    output: num(c.output),
+    cache: {
+      read: num(c.cache_read ?? c.cacheRead ?? nestCache?.read),
+      write: num(c.cache_write ?? c.cacheWrite ?? nestCache?.write),
+    },
+    context_over_200k: over
+      ? {
+          input: num(over.input),
+          output: num(over.output),
+          cache: {
+            read: num(over.cache_read ?? over.cacheRead ?? overCache?.read),
+            write: num(over.cache_write ?? over.cacheWrite ?? overCache?.write),
+          },
+        }
+      : undefined,
+  }
+}
+
 /**
- * Load static prices (incl. context_over_200k) from the `provider` section of
- * opencode.json for offline recompute. Missing file → empty array; parse failure
- * warns and returns an empty array.
+ * Load static prices (incl. context_over_200k) from `opencode.json` or `opencode.jsonc`
+ * (supports both V1 `provider` and V2 `providers`) for offline recompute.
+ * Missing file → empty array; parse failure warns and returns an empty array.
  */
-function loadOpencodeProviders(): ProviderInfo[] {
-  const path = process.env.OPENCODE_CONFIG ?? `${homedir()}/.config/opencode/opencode.json`
-  if (!existsSync(path)) return []
+export function loadOpencodeProviders(configPath?: string): ProviderInfo[] {
+  const candidates = configPath
+    ? [configPath]
+    : process.env.OPENCODE_CONFIG
+      ? [process.env.OPENCODE_CONFIG]
+      : [
+          `${homedir()}/.config/opencode/opencode.json`,
+          `${homedir()}/.config/opencode/opencode.jsonc`,
+        ]
+  const path = candidates.find((p) => existsSync(p))
+  if (!path) return []
   try {
     const raw = parseJsonc<{
       provider?: Record<string, unknown>
+      providers?: Record<string, unknown>
     }>(readFileSync(path, "utf8"))
     const out: ProviderInfo[] = []
-    for (const [pid, pv] of Object.entries(raw.provider ?? {})) {
+    const section = raw.provider ?? raw.providers ?? {}
+    for (const [pid, pv] of Object.entries(section)) {
       const po = pv as { models?: Record<string, unknown> } | undefined
       if (!po?.models) continue
       const models: ProviderInfo["models"] = {}
@@ -49,22 +85,7 @@ function loadOpencodeProviders(): ProviderInfo[] {
         const mo = mv as { cost?: Record<string, unknown> } | undefined
         const c = mo?.cost
         if (!c || typeof c !== "object") continue
-        const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0)
-        const over = c.context_over_200k as Record<string, unknown> | undefined
-        models[mid] = {
-          cost: {
-            input: num(c.input),
-            output: num(c.output),
-            cache: { read: num(c.cache_read), write: num(c.cache_write) },
-            context_over_200k: over
-              ? {
-                  input: num(over.input),
-                  output: num(over.output),
-                  cache: { read: num(over.cache_read), write: num(over.cache_write) },
-                }
-              : undefined,
-          },
-        }
+        models[mid] = { cost: parseProviderCost(c) }
       }
       if (Object.keys(models).length > 0) out.push({ id: pid, models })
     }
@@ -73,6 +94,22 @@ function loadOpencodeProviders(): ProviderInfo[] {
     console.error(`warning: failed to read or parse ${path}; offline dynamic pricing is disabled`)
     return []
   }
+}
+
+export function injectDynamicCosts(
+  records: LlmCallRecord[],
+  providers: ReadonlyArray<ProviderInfo>,
+  rules: DynamicPricingConfig,
+): number {
+  let injected = 0
+  for (const r of records) {
+    const dc = recomputeRecordCost(r, providers, rules)
+    if (dc !== null) {
+      r.dynCost = dc
+      injected++
+    }
+  }
+  return injected
 }
 
 function timestampSuffix(): string {
@@ -240,7 +277,7 @@ function summarizeStats(data: LlmCallRecord[]) {
   return {
     totalCalls: data.length,
     totalSessions: sessionIds.size,
-    totalCost: data.reduce((s, r) => s + r.cost, 0),
+    totalCost: data.reduce((s, r) => s + (r.dynCost ?? r.cost), 0),
   }
 }
 
@@ -927,22 +964,13 @@ export async function main(argv: string[]): Promise<void> {
     process.exit(1)
   }
 
-  // Offline dynamic-pricing recompute: inject dynCost per record (time + context tier); the UI prefers it when present.
+  // Offline dynamic-pricing recompute: inject dynCost per record (time + context tier + cache-hit.json rules); the UI prefers it when present.
   {
     const providers = loadOpencodeProviders()
     const rules = loadPluginConfig().dynamicPricing
-    if (providers.length > 0) {
-      let injected = 0
-      for (const r of records) {
-        const dc = recomputeRecordCost(r, providers, rules)
-        if (dc !== null) {
-          r.dynCost = dc
-          injected++
-        }
-      }
-      if (injected > 0) {
-        console.error(`dynamic pricing: recomputed cost for ${injected}/${records.length} records`)
-      }
+    const injected = injectDynamicCosts(records, providers, rules)
+    if (injected > 0) {
+      console.error(`dynamic pricing: recomputed cost for ${injected}/${records.length} records`)
     }
   }
 

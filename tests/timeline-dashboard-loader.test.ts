@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
-import { expandPattern, loadRecords } from "../scripts/timeline-dashboard.ts"
+import { expandPattern, loadRecords, injectDynamicCosts, loadOpencodeProviders } from "../scripts/timeline-dashboard.ts"
+import { DEFAULT_SCHEDULE } from "../src/dynamic-pricing/types.ts"
 
 const dirs: string[] = []
 
@@ -128,5 +129,66 @@ describe("loadRecords", () => {
       JSON.stringify({ schema: 2, created: "2026-01-01T10:00:00.000+08:00" }),
     ])
     expect(await loadRecords([path])).toHaveLength(1)
+  })
+})
+
+describe("injectDynamicCosts & loadOpencodeProviders", () => {
+  test("injects dynCost from cache-hit.json rules even when opencode providers is empty (e.g. acp)", () => {
+    const records = [
+      JSON.parse(
+        rec({
+          providerId: "acp",
+          modelId: "gemini-4-hydrogen",
+          input: 1_000_000,
+          output: 100_000,
+          cacheRead: 500_000,
+          cacheWrite: 0,
+          cost: 0,
+        }),
+      ),
+    ]
+    const rules = {
+      enabled: true,
+      timezone: "Asia/Shanghai",
+      schedule: DEFAULT_SCHEDULE,
+      contextThreshold: 200_000,
+      providers: {
+        acp: {
+          models: {
+            "gemini-4-*": {
+              cost: { input: 1.5, output: 7.5, cache: { read: 0.075, write: 0 } },
+            },
+          },
+        },
+      },
+    }
+    const injected = injectDynamicCosts(records, [], rules)
+    expect(injected).toBe(1)
+    expect(records[0].dynCost).toBeCloseTo(1.5 + 0.75 + 0.0375, 6)
+  })
+
+  test("loadOpencodeProviders reads opencode.jsonc and V2 providers shape", async () => {
+    const dir = await tempDir()
+    const path = join(dir, "opencode.jsonc")
+    await writeFile(
+      path,
+      `// jsonc comment
+      {
+        "providers": {
+          "gateway-custom": {
+            "models": {
+              "gemini-4-hydrogen-xhigh": {
+                "cost": { "input": 1.5, "output": 7.5, "cache": { "read": 0.075, "write": 0 } }
+              }
+            }
+          }
+        }
+      }`,
+    )
+    const providers = loadOpencodeProviders(path)
+    expect(providers).toHaveLength(1)
+    expect(providers[0].id).toBe("gateway-custom")
+    expect(providers[0].models["gemini-4-hydrogen-xhigh"].cost.input).toBe(1.5)
+    expect(providers[0].models["gemini-4-hydrogen-xhigh"].cost.cache.read).toBe(0.075)
   })
 })

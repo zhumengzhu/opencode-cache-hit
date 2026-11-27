@@ -58,7 +58,7 @@ export function CacheHitSidebar(props: {
     main: props.main,
     subAgents: props.subAgents,
     providers: props.providers,
-    dynamicPricing: props.dynamicPricing,
+    dynamicPricing: () => props.dynamicPricing,
     layout,
     firstPartTime: props.firstPartTime,
   })

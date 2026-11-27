@@ -57,7 +57,7 @@ export function useCacheHitMetrics(props: {
   main: Accessor<SessionSnapshot>
   subAgents: Accessor<SubAgentSummary[]>
   providers: Accessor<ReadonlyArray<ProviderInfo>>
-  dynamicPricing: DynamicPricingConfig
+  dynamicPricing: Accessor<DynamicPricingConfig> | DynamicPricingConfig
   layout: PanelLayout
   firstPartTime: Accessor<ReadonlyMap<string, number>>
 }) {
@@ -105,6 +105,9 @@ export function useCacheHitMetrics(props: {
   const perCall = createMemo(() => computePerCallHitTrend(metricInput()))
   const sessionRatio = createMemo(() => cacheHitRatio(main().cacheRead, main().input))
 
+  const dynamicRules = () =>
+    typeof props.dynamicPricing === "function" ? props.dynamicPricing() : props.dynamicPricing
+
   // Dynamic pricing: precise refresh at schedule boundaries (no polling).
   // Single timer ref + component-owner onCleanup: recursively scheduled timers are
   // cleaned up on unmount (onCleanup inside the setTimeout callback would be outside
@@ -112,7 +115,7 @@ export function useCacheHitMetrics(props: {
   const [now, setNow] = createSignal(Date.now())
   let boundaryTimer: ReturnType<typeof setTimeout> | undefined
   const scheduleBoundary = () => {
-    const rules = props.dynamicPricing
+    const rules = dynamicRules()
     const ms =
       rules.schedule.length > 0 ? nextBoundaryMs(now(), rules.schedule, rules.timezone || "UTC") : 0
     if (ms <= 0) return
@@ -130,24 +133,24 @@ export function useCacheHitMetrics(props: {
     computePricing(props.providers(), main().providerID, main().model, main().cacheRead, {
       now: now(),
       contextTokens: main().input + main().cacheRead,
-      rules: props.dynamicPricing,
+      rules: dynamicRules(),
     }),
   )
   const sessionPricing = createMemo(() =>
-    computeSessionPricing(metricInput(), props.providers(), props.dynamicPricing),
+    computeSessionPricing(metricInput(), props.providers(), dynamicRules()),
   )
 
   // Sub-agent cache savings: level by current time-of-day + each child's total input (input + cacheRead).
   const subsSaved = createMemo(() =>
     computeSubsSaved(subs(), props.providers(), {
       now: now(),
-      rules: props.dynamicPricing,
+      rules: dynamicRules(),
     }),
   )
 
   // Sub-agent dynamic cost (session creation time + aggregate tokens); no created / unpriced → null.
   const subAgentDynamicCosts = createMemo(() => {
-    const rules = props.dynamicPricing
+    const rules = dynamicRules()
     const providers = props.providers()
     return new Map(
       subs().map((s) => [s.id, recomputeSubAgentCost(s, providers, rules)] as const),
