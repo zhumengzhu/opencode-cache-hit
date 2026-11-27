@@ -57,6 +57,67 @@ function maybeWarnDeepSeekWeekend(rules: DynamicPricingConfig | undefined, provi
   )
 }
 
+function hasGlob(pattern: string): boolean {
+  return pattern.includes("*") || pattern.includes("?")
+}
+
+function globMatches(pattern: string, target: string): boolean {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")
+  return new RegExp(`^${escaped}$`).test(target)
+}
+
+function globSpecificity(pattern: string): [number, number] {
+  const literals = pattern.replace(/[*?]/g, "").length
+  const wildcards = pattern.length - literals
+  return [literals, -wildcards]
+}
+
+function matchKey<T>(map: Record<string, T> | undefined, target: string): T | undefined {
+  if (!map) return undefined
+  if (Object.prototype.hasOwnProperty.call(map, target)) return map[target]
+  let bestVal: T | undefined
+  let bestScore: [number, number] | undefined
+  for (const [pattern, val] of Object.entries(map)) {
+    if (!hasGlob(pattern) || !globMatches(pattern, target)) continue
+    const score = globSpecificity(pattern)
+    if (
+      !bestScore ||
+      score[0] > bestScore[0] ||
+      (score[0] === bestScore[0] && score[1] > bestScore[1])
+    ) {
+      bestScore = score
+      bestVal = val
+    }
+  }
+  return bestVal
+}
+
+function lookupExplicitRule(
+  providers: DynamicPricingConfig["providers"],
+  providerID: string,
+  modelID: string,
+): ModelPricingRule | undefined {
+  // Exact provider match first (exact model → glob model); only fall back to glob providers if unmatched.
+  const exactProvider = Object.prototype.hasOwnProperty.call(providers, providerID)
+    ? providers[providerID]
+    : undefined
+  const fromExactProvider = matchKey(exactProvider?.models, modelID)
+  if (fromExactProvider) return fromExactProvider
+
+  const globProviders = Object.entries(providers)
+    .filter(([pid]) => hasGlob(pid) && globMatches(pid, providerID))
+    .sort(([a], [b]) => {
+      const sa = globSpecificity(a)
+      const sb = globSpecificity(b)
+      return sb[0] - sa[0] || sb[1] - sa[1]
+    })
+  for (const [, p] of globProviders) {
+    const matched = matchKey(p.models, modelID)
+    if (matched) return matched
+  }
+  return undefined
+}
+
 function effectiveRule(
   rules: DynamicPricingConfig | undefined,
   providerID: string,
@@ -64,7 +125,7 @@ function effectiveRule(
 ): ModelPricingRule | undefined {
   // Master switch off → fully static (explicit rules, built-in default, context tiers all inactive).
   if (!rules?.enabled) return undefined
-  const explicit = rules.providers[providerID]?.models[modelID]
+  const explicit = lookupExplicitRule(rules.providers, providerID, modelID)
   if (explicit) return explicit
   // Empty schedule → nothing to match; skip the built-in default (avoids spuriously flagging costs as dynamic).
   if (rules.schedule.length > 0 && isDeepSeek(providerID, modelID)) {
@@ -87,8 +148,10 @@ function tierOf(cost: ModelCost, tokens: number | undefined, threshold: number):
 
 /**
  * Resolve the model's current effective price. Priority:
- * 1. explicit `levels` absolute prices (per level; miss falls back to static) → 2. explicit `multipliers`
- * → 3. built-in DeepSeek default multipliers → 4. `state.provider` static price (with context tiers).
+ * 1. explicit `levels` absolute prices (per level; miss falls back to rule `cost` or static)
+ * 2. explicit `multipliers` (scales rule `cost` or `state.provider` static price)
+ * 3. built-in DeepSeek default multipliers
+ * 4. explicit rule `cost` or `state.provider` static price (with context tiers).
  * `enabled: false` turns off every dynamic dimension and returns the static base price.
  */
 export function resolveModelCost(
@@ -97,15 +160,28 @@ export function resolveModelCost(
   modelID: string,
   ctx: PricingLookupContext = {},
 ): ResolvedPricing | null {
-  const base = lookupModelCost(providers, providerID, modelID)
-  if (!base) return null
+  const runtimeBase = lookupModelCost(providers, providerID, modelID)
   // Master switch off → fully static base price (context tiers off too), matching the README.
-  if (ctx.rules && !ctx.rules.enabled) return { rates: base, explicit: false }
+  if (ctx.rules && !ctx.rules.enabled) {
+    return runtimeBase ? { rates: runtimeBase, explicit: false } : null
+  }
   const now = ctx.now ?? Date.now()
   const rules = ctx.rules
   const level = resolveLevel(now, rules)
   maybeWarnDeepSeekWeekend(rules, providerID, modelID)
   const rule = effectiveRule(rules, providerID, modelID)
+  const base = rule?.cost ?? runtimeBase
+
+  if (rule?.levels) {
+    const absolute = level ? rule.levels[level] : undefined
+    if (absolute) {
+      // Absolute prices are complete (no context-tier semantics) → no context badge, avoids misleading.
+      return { rates: absolute, level, contextTier: undefined, explicit: true }
+    }
+    if (!base) return null
+  }
+  if (!base) return null
+
   // Tier threshold priority: per-model rule.contextThreshold > runtime tier.size
   // (cost.contextThreshold) > global contextThreshold > 200k. Unified onto base so
   // tierOf and selectContextRates stay consistent.
@@ -115,11 +191,6 @@ export function resolveModelCost(
   const contextTier = tierOf(effBase, ctx.contextTokens, effThreshold)
 
   if (rule?.levels) {
-    const absolute = level ? rule.levels[level] : undefined
-    if (absolute) {
-      // Absolute prices are complete (no context-tier semantics) → no context badge, avoids misleading.
-      return { rates: absolute, level, contextTier: undefined, explicit: true }
-    }
     // Level miss (custom schedule doesn't cover now / level name mismatch) → static price, never pick the first level arbitrarily.
     return { rates: selectContextRates(effBase, ctx.contextTokens, effThreshold), level: undefined, contextTier, explicit: true }
   }

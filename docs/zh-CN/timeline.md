@@ -334,10 +334,12 @@ bun scripts/plot-hit-rate.ts $LOG -o /tmp/hit.svg
 bun scripts/plot-hit-rate.ts $LOG --by-root -o /tmp/hit-multi.svg
 
 # 交互式 HTML 仪表盘（筛选、Chart.js）；加 --open 才会打开浏览器
-# 读取 ~/.config/opencode/opencode.json（支持 JSONC 注释）并用动态计价（时段 / 上下文档位）
-# 重算成本——注入为 `dynCost`，与原值不同时以 ≈ 展示并计入图表/合计
+# 读取 ~/.config/opencode/opencode.json / opencode.jsonc（若存在）及 cache-hit.json 中的
+# dynamicPricing 规则重算成本——注入为 `dynCost`，与原值不同时以 ≈ 展示并计入图表/合计
 bun scripts/timeline-dashboard.ts --open
 ```
+
+当 OpenCode 上报 `msg.cost: 0`（如未定价的 ACP 后端）且 `dynamicPricing` 对该模型显式配置了单价时，collector 也会在写入 JSONL 时直接按 USD 计算并填充 `cost`。
 
 默认日志目录与插件 `timeline.dir` 一致（`~/.local/share/opencode/logs/cache-hit/`）。
 

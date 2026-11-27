@@ -28,11 +28,17 @@ export type DynamicPricingSchedule = ScheduleLevel[]
 
 /**
  * Per-model pricing rule.
+ * - `cost`: static prices (USD/1M), overrides or supplies `state.provider` when missing (no time-of-day badge).
  * - `levels`: absolute prices (level name → USD/1M four rates), wins over multipliers.
- * - `multipliers`: factors relative to the `state.provider` static price (e.g. offpeak 0.5).
+ * - `multipliers`: factors relative to the `state.provider` (or rule `cost`) static price (e.g. offpeak 0.5).
  * - `contextThreshold`: overrides the global context-tier threshold (tokens).
  */
 export type ModelPricingRule = {
+  /**
+   * Static prices (USD/1M four rates, optional `context_over_200k`).
+   * Supplies pricing when `state.provider` has none, or overrides it without time-of-day badges.
+   */
+  cost?: ModelCost
   /**
    * Absolute prices (level name → USD/1M four rates), wins over multipliers.
    * `currency` is the original currency of `levels` (default USD); non-USD is
@@ -41,9 +47,9 @@ export type ModelPricingRule = {
   levels?: Record<string, ModelCost>
   multipliers?: Record<string, number>
   contextThreshold?: number
-  /** Currency of `levels` absolute prices: USD (default) | CNY | EUR | GBP | JPY. */
+  /** Currency of `cost` / `levels` absolute prices: USD (default) | CNY | EUR | GBP | JPY. */
   currency?: string
-  /** Exchange rate USD → levels currency (for non-USD levels, e.g. 6.77 for CNY);
+  /** Exchange rate USD → rule currency (for non-USD `cost` / `levels`, e.g. 6.77 for CNY);
    * when omitted, inferred from cost.rate only if currency === display currency,
    * otherwise warn and treat as USD. */
   rate?: number

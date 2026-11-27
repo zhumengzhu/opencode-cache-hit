@@ -1,4 +1,5 @@
 import { type CostDisplayConfig, normalizeCostDisplay, DEFAULT_COST_DISPLAY, resolveExchangeRate, CURRENCY_PRESETS } from "./format-cost.ts"
+import type { ModelCost } from "./types.ts"
 import { resolveLang, type Lang } from "./i18n.ts"
 import {
   type DynamicPricingConfig,
@@ -246,6 +247,38 @@ export function parseDuration(raw: string): number | null {
   return Math.floor(value * multiplier)
 }
 
+function parseModelCostEntry(raw: unknown, allowContextTier = false): ModelCost | null {
+  if (!raw || typeof raw !== "object") return null
+  const lv = raw as Record<string, unknown>
+  const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0)
+  // Accept both shapes: flat cacheRead/cacheWrite (docs/example) and nested cache:{read,write} (ModelCost type).
+  const nestCache = lv.cache as { read?: unknown; write?: unknown } | undefined
+  const cost: ModelCost = {
+    input: num(lv.input),
+    output: num(lv.output),
+    cache: {
+      read: num(lv.cacheRead ?? lv.cache_read ?? nestCache?.read),
+      write: num(lv.cacheWrite ?? lv.cache_write ?? nestCache?.write),
+    },
+  }
+  if (allowContextTier && lv.context_over_200k !== undefined) {
+    const over = parseModelCostEntry(lv.context_over_200k, false)
+    if (over) cost.context_over_200k = over
+  }
+  return cost
+}
+
+function convertModelCostCurrency(rates: ModelCost, usdPerUnit: number): ModelCost {
+  return {
+    input: rates.input / usdPerUnit,
+    output: rates.output / usdPerUnit,
+    cache: { read: rates.cache.read / usdPerUnit, write: rates.cache.write / usdPerUnit },
+    ...(rates.context_over_200k
+      ? { context_over_200k: convertModelCostCurrency(rates.context_over_200k, usdPerUnit) }
+      : {}),
+  }
+}
+
 function normalizeModelPricingRule(raw: unknown): ModelPricingRule {
   const rule: ModelPricingRule = {}
   if (!raw || typeof raw !== "object") return rule
@@ -256,23 +289,14 @@ function normalizeModelPricingRule(raw: unknown): ModelPricingRule {
   if (typeof o.rate === "number" && Number.isFinite(o.rate) && o.rate > 0) {
     rule.rate = o.rate
   }
+  const staticCost = parseModelCostEntry(o.cost, true)
+  if (staticCost) rule.cost = staticCost
   const levels = o.levels
   if (levels && typeof levels === "object") {
-    const out: Record<string, { input: number; output: number; cache: { read: number; write: number } }> = {}
+    const out: Record<string, ModelCost> = {}
     for (const [level, v] of Object.entries(levels as Record<string, unknown>)) {
-      const lv = v as Record<string, unknown> | undefined
-      if (!lv || typeof lv !== "object") continue
-      const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0)
-      // Accept both shapes: flat cacheRead/cacheWrite (docs/example) and nested cache:{read,write} (ModelCost type).
-      const nestCache = lv.cache as { read?: unknown; write?: unknown } | undefined
-      out[level] = {
-        input: num(lv.input),
-        output: num(lv.output),
-        cache: {
-          read: num(lv.cacheRead ?? lv.cache_read ?? nestCache?.read),
-          write: num(lv.cacheWrite ?? lv.cache_write ?? nestCache?.write),
-        },
-      }
+      const parsed = parseModelCostEntry(v, false)
+      if (parsed) out[level] = parsed
     }
     if (Object.keys(out).length > 0) rule.levels = out
   }
@@ -373,22 +397,21 @@ export function normalizeDynamicPricingConfig(
         // Rate (USD → levels currency) priority: rule.rate > cost.rate when the levels currency
         // equals the display currency > warn and treat as USD when undeterminable (avoids converting
         // with a wrong display rate, e.g. dividing EUR by USD→CNY).
-        if (rule.levels && rule.currency && rule.currency !== "USD") {
+        if ((rule.levels || rule.cost) && rule.currency && rule.currency !== "USD") {
           let usdPerLevel: number | undefined = rule.rate
           if (usdPerLevel === undefined && rule.currency === opts?.displayCurrency && opts?.usdRate && opts.usdRate > 0) {
             usdPerLevel = opts.usdRate
           }
           if (usdPerLevel === undefined || usdPerLevel <= 0) {
             console.error(
-              `dynamicPricing: cannot convert ${rule.currency} levels to USD for ${pid}/${mid} — ` +
+              `dynamicPricing: cannot convert ${rule.currency} prices to USD for ${pid}/${mid} — ` +
                 `set "rate" (USD→${rule.currency}) or use cost.currency = ${rule.currency}; treating values as USD`,
             )
           } else {
-            for (const [level, rates] of Object.entries(rule.levels)) {
-              rule.levels[level] = {
-                input: rates.input / usdPerLevel,
-                output: rates.output / usdPerLevel,
-                cache: { read: rates.cache.read / usdPerLevel, write: rates.cache.write / usdPerLevel },
+            if (rule.cost) rule.cost = convertModelCostCurrency(rule.cost, usdPerLevel)
+            if (rule.levels) {
+              for (const [level, rates] of Object.entries(rule.levels)) {
+                rule.levels[level] = convertModelCostCurrency(rates, usdPerLevel)
               }
             }
             delete rule.currency

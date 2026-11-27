@@ -359,4 +359,33 @@ describe("normalizeDynamicPricingConfig", () => {
     expect(offpeak?.cache.read).toBeCloseTo(0.1, 6) // 0.677 / 6.77
     expect(offpeak?.input).toBeCloseTo(1, 6)
   })
+  test("parses static cost with flat cacheRead, context_over_200k, and CNY conversion", () => {
+    const cfg = normalizeDynamicPricingConfig(
+      {
+        providers: {
+          acp: {
+            models: {
+              "gemini-4-*": {
+                currency: "CNY",
+                cost: {
+                  input: 6.77,
+                  output: 33.85,
+                  cacheRead: 0.677,
+                  cacheWrite: 0,
+                  context_over_200k: { input: 13.54, output: 67.7, cacheRead: 1.354 },
+                },
+              },
+            },
+          },
+        },
+      },
+      { usdRate: 6.77, displayCurrency: "CNY" },
+    )
+    const cost = cfg.providers.acp.models["gemini-4-*"].cost
+    expect(cost?.input).toBeCloseTo(1, 6)
+    expect(cost?.output).toBeCloseTo(5, 6)
+    expect(cost?.cache.read).toBeCloseTo(0.1, 6)
+    expect(cost?.context_over_200k?.input).toBeCloseTo(2, 6)
+    expect(cost?.context_over_200k?.cache.read).toBeCloseTo(0.2, 6)
+  })
 })

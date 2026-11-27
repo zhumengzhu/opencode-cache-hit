@@ -1,8 +1,10 @@
 import type { FirstPartTimeTracker } from "../first-part-time.ts"
 import type { ItlTracker } from "../itl-tracker.ts"
 import type { ToolTimingTracker } from "../tool-timing.ts"
-import type { TimelineConfig } from "../plugin-config.ts"
-import type { AssistantMessage } from "../types.ts"
+import type { DynamicPricingConfig, TimelineConfig } from "../plugin-config.ts"
+import type { AssistantMessage, ProviderInfo } from "../types.ts"
+import { billingCost } from "../dynamic-pricing/context.ts"
+import { resolveModelCost } from "../dynamic-pricing/lookup.ts"
 import { assistantMessageToRecord } from "./records.ts"
 import { isInteractiveAssistantMessage } from "../stats.ts"
 import {
@@ -29,6 +31,8 @@ export function createTimelineCollector(opts: {
   firstPartTime: FirstPartTimeTracker
   toolTiming: ToolTimingTracker
   itlTracker?: ItlTracker
+  getDynamicPricing?: () => DynamicPricingConfig
+  getProviders?: () => ReadonlyArray<ProviderInfo>
   /** Test hook: replace disk append */
   append?: (logPath: string, record: LlmCallRecord, config: TimelineConfig) => Promise<void>
 }): TimelineCollector {
@@ -103,6 +107,24 @@ export function createTimelineCollector(opts: {
       q && q.count,
     )
     if (!rec) return
+    if (rec.cost === 0 && opts.getDynamicPricing) {
+      const totalTokens = rec.input + rec.output + rec.cacheRead + rec.cacheWrite
+      if (totalTokens > 0) {
+        const resolved = resolveModelCost(
+          opts.getProviders?.() ?? [],
+          rec.providerId ?? "",
+          rec.modelId,
+          {
+            now: msg.time?.created,
+            contextTokens: rec.input + rec.cacheRead,
+            rules: opts.getDynamicPricing(),
+          },
+        )
+        if (resolved?.explicit) {
+          rec.cost = billingCost(resolved.rates, rec.input, rec.output, rec.cacheRead, rec.cacheWrite)
+        }
+      }
+    }
     if (!config.flushIncomplete && !rec.isComplete) return
     // Skip records with invalid timestamps (e.g. uninitialised epoch 1970)
     if (rec.created.startsWith("1970")) return

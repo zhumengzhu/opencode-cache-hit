@@ -6,6 +6,7 @@ import { formatStreamingNowDisplay, type StreamingPhase } from "./streaming-stat
 import type { CacheHitMetrics } from "./use-cache-hit-metrics.ts"
 import type { CacheTTLConfig } from "./plugin-config.ts"
 import type { AssistantMessage } from "./types.ts"
+import { resolveShownSessionCost } from "./pricing.ts"
 import { formatRatioAsPercent } from "./format-cache-ui.ts"
 import {
   TuiHitRow,
@@ -42,14 +43,10 @@ export function MainSessionView(props: {
     return formatStreamingNowDisplay(now.phase, now.speed, m.t().streamingIdle, m.useTps())
   })
 
-  /** Use the per-message recomputed cost when dynamic rules price every message, else OpenCode's msg.cost. */
-  const shownCost = createMemo(() => {
-    const pricing = m.sessionPricing()
-    if (pricing.counted > 0 && pricing.dynamic && pricing.unpriced === 0) {
-      return pricing.cost
-    }
-    return m.blendedMain().cost
-  })
+  /** Use the per-message recomputed cost when dynamic rules price every message (or OpenCode reported 0). */
+  const shownCost = createMemo(() =>
+    resolveShownSessionCost(m.sessionPricing(), m.blendedMain().cost),
+  )
 
   const rateLabel = createMemo(() => {
     const p = m.pricing()

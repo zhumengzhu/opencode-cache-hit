@@ -490,3 +490,122 @@ describe("computePricing — backward compat + dynamic fields", () => {
     expect(p.saved).toBe(((0.25 - 0.005) * 1_000_000) / 1_000_000)
   })
 })
+
+describe("resolveModelCost — static cost fallback & glob matching", () => {
+  test("static rule.cost works when state.provider has no pricing (e.g. acp)", () => {
+    const rules = {
+      ...DEFAULT_RULES,
+      providers: {
+        acp: {
+          models: {
+            "gemini-4-hydrogen": {
+              cost: { input: 1.5, output: 7.5, cache: { read: 0.075, write: 0 } },
+            },
+          },
+        },
+      },
+    }
+    const r = resolveModelCost([], "acp", "gemini-4-hydrogen", {
+      now: bjt(2026, 8, 10, 10, 0), // peak hour, must NOT add peak/offpeak badge
+      rules,
+    })
+    expect(r?.rates.input).toBe(1.5)
+    expect(r?.rates.output).toBe(7.5)
+    expect(r?.rates.cache.read).toBe(0.075)
+    expect(r?.level).toBeUndefined()
+    expect(r?.explicit).toBe(true)
+  })
+
+  test("static rule.cost overrides state.provider without time-of-day badge", () => {
+    const rules = {
+      ...DEFAULT_RULES,
+      providers: {
+        openai: {
+          models: {
+            "gpt-5.6": {
+              cost: {
+                input: 1.2,
+                output: 3.6,
+                cache: { read: 0.12, write: 0 },
+                context_over_200k: { input: 2.4, output: 7.2, cache: { read: 0.24, write: 0 } },
+              },
+            },
+          },
+        },
+      },
+    }
+    const r = resolveModelCost(PROVIDERS, "openai", "gpt-5.6", {
+      contextTokens: 250_000,
+      rules,
+    })
+    expect(r?.rates.input).toBe(2.4)
+    expect(r?.contextTier).toBe("over")
+    expect(r?.level).toBeUndefined()
+    expect(r?.explicit).toBe(true)
+  })
+
+  test("explicit levels work even when state.provider has no pricing", () => {
+    const rules = {
+      ...DEFAULT_RULES,
+      providers: {
+        acp: {
+          models: {
+            "deepseek-v4": {
+              levels: {
+                peak: { input: 0.44, output: 0.88, cache: { read: 0.01, write: 0 } },
+                offpeak: { input: 0.22, output: 0.44, cache: { read: 0.005, write: 0 } },
+              },
+            },
+          },
+        },
+      },
+    }
+    const r = resolveModelCost([], "acp", "deepseek-v4", {
+      now: bjt(2026, 8, 10, 10, 0),
+      rules,
+    })
+    expect(r?.rates.input).toBe(0.44)
+    expect(r?.level).toBe("peak")
+    expect(r?.explicit).toBe(true)
+  })
+
+  test("glob matching precedence: exact > specific glob > wildcard, exact provider > glob provider", () => {
+    const rules = {
+      ...DEFAULT_RULES,
+      providers: {
+        acp: {
+          models: {
+            "gemini-4-hydrogen": { cost: { input: 1.5, output: 7.5, cache: { read: 0.075, write: 0 } } },
+            "gemini-4-*": { cost: { input: 1.0, output: 5.0, cache: { read: 0.05, write: 0 } } },
+            "*": { cost: { input: 0.5, output: 2.0, cache: { read: 0.02, write: 0 } } },
+          },
+        },
+        "*": {
+          models: {
+            "other-*": { cost: { input: 9.0, output: 18.0, cache: { read: 0.9, write: 0 } } },
+          },
+        },
+      },
+    }
+    expect(resolveModelCost([], "acp", "gemini-4-hydrogen", { rules })?.rates.input).toBe(1.5)
+    expect(resolveModelCost([], "acp", "gemini-4-neon", { rules })?.rates.input).toBe(1.0)
+    expect(resolveModelCost([], "acp", "claude-4", { rules })?.rates.input).toBe(0.5)
+    expect(resolveModelCost([], "custom", "other-model", { rules })?.rates.input).toBe(9.0)
+    expect(resolveModelCost([], "custom", "unmatched", { rules })).toBeNull()
+  })
+
+  test("glob treats regex metacharacters literally", () => {
+    const rules = {
+      ...DEFAULT_RULES,
+      providers: {
+        acp: {
+          models: {
+            "gemini-3.8-*": { cost: { input: 0.75, output: 3.75, cache: { read: 0.075, write: 0 } } },
+          },
+        },
+      },
+    }
+    expect(resolveModelCost([], "acp", "gemini-3.8-flash", { rules })?.rates.input).toBe(0.75)
+    expect(resolveModelCost([], "acp", "gemini-3X8-flash", { rules })).toBeNull()
+  })
+})

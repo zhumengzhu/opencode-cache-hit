@@ -91,6 +91,8 @@ export function CacheHitSidebarHost(props: {
     firstPartTime: firstPartTracker,
     toolTiming,
     itlTracker,
+    getDynamicPricing: () => dynamicPricing(),
+    getProviders: () => props.api.state.provider,
   })
   onCleanup(() => timeline.dispose())
 
